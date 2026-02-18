@@ -2,37 +2,6 @@
 
 A real-time 3D multiplayer shooter game built with Node.js, Express, WebSockets, and Three.js.
 
-## Features
-
-- **Real-time Multiplayer**: Play with other players in the same game world
-- **3D Graphics**: Built with Three.js for immersive gameplay
-- **Simple Controls**: WASD to move, mouse to look, click/space to shoot
-- **Live HUD**: See your position, health, score, and player count
-- **Bullet Physics**: Bullets travel and detect collisions with players
-- **Health System**: Get damaged when hit, respawn at full health
-- **Scoring**: Earn points for eliminating other players
-
-## Project Structure
-
-```
-WebShooter/
-├── server/
-│   ├── server.js          # Main Node.js server with WebSocket support
-│   ├── gameState.js       # Game logic and state management
-│   └── package.json       # Dependencies
-│
-├── client/
-│   ├── index.html         # Main HTML file
-│   ├── css/
-│   │   └── style.css      # Game styling and HUD
-│   └── js/
-│       ├── network.js     # WebSocket client communication
-│       ├── input.js       # Keyboard and mouse input handling
-│       ├── player.js      # Player management and 3D meshes
-│       └── game.js        # Main game engine with Three.js
-│
-└── README.md
-```
 
 ## Installation & Setup
 
@@ -82,35 +51,12 @@ Multiple players can join from different browser windows/tabs or different machi
 ### Server Side (Node.js)
 - **WebSocket Server**: Maintains persistent connection with each player
 - **Game State**: Tracks all players, their positions, health, and bullets
-- **Game Loop**: Runs at 60 FPS, updates bullet positions and handles collisions
 - **Broadcasting**: Sends game state updates to all connected players
 
 ### Client Side (Browser)
 - **Three.js Rendering**: Renders 3D scene with players, bullets, and environment
-- **Input Handling**: Captures keyboard and mouse input
 - **Network Communication**: Sends player position/rotation updates and shoot events
 - **Player Interpolation**: Updates remote player positions based on server data
-- **HUD Display**: Shows current position, health, score, and player count
-
-## Game Mechanics
-
-1. **Movement**: Use WASD to move around the arena
-2. **Aiming**: Use mouse to look around (auto-aims forward)
-3. **Shooting**: Click or press Space to fire bullets
-4. **Damage**: Players take 25 damage per hit
-5. **Respawn**: When health reaches 0, respawn with full health at a random location
-6. **Scoring**: Get 10 points for each elimination
-
-## Customization
-
-You can easily modify:
-
-- **Bullet Damage**: In `server/gameState.js`, change the value in `player.health -= 25`
-- **Bullet Speed**: In `server/gameState.js`, adjust `bullet.speed`
-- **Movement Speed**: In `client/js/game.js`, change the `speed` variable
-- **Shooting Cooldown**: In `client/js/game.js`, adjust `shootCooldown`
-- **Arena Size**: In both server and client, change the `maxBounds` and game area dimensions
-- **Colors & Styling**: Edit `client/css/style.css`
 
 ## Development
 
@@ -133,19 +79,24 @@ npm run dev
 
 ## Server API
 
-All communication happens via WebSocket with JSON messages. This is the full list of messages a bot can send and should expect to receive.
+All communication happens via WebSocket JSON messages.
 
-Client can send
--join (no payload; server assigns name)
--move
--shoot
--respawn
+There are **2 WebSocket channels**:
+- **Game channel**: `ws(s)://<host>/`
 
-Servers will send 
--hello
--join response
--game state
--bullet fired (mostly for sound effects)
+### Game channel message list
+
+Client can send:
+- `join` (no payload; server assigns name)
+- `move`
+- `shoot`
+- `respawn`
+
+Server can send:
+- `hello`
+- `joinResponse`
+- `gameState`
+- `bulletFired` (optional immediate event for effects)
 
 
 
@@ -194,7 +145,13 @@ Servers will send
 ```json
 {
   "type": "joinResponse",
-  "name": "SwiftPhoenix42"
+  "name": "SwiftPhoenix42",
+  "config": {
+    "arenaHalfSize": 80,
+    "shootCooldownMs": 100,
+    "maxHealth": 100,
+    "lookSensitivity": 0.006
+  }
 }
 ```
 
@@ -251,6 +208,35 @@ Use this only for fast client-side effects (e.g., audio). The authoritative bull
   "bullet": {
     "position": { "x": 0, "y": 1, "z": 0 },
     "direction": { "x": 0, "y": 0, "z": -1 }
+  }
+}
+```
+
+### Debug channel message list (`/debug`)
+
+Debug client can send:
+- `debugKillPlayer`
+
+Debug server can send:
+- `debugState`
+
+#### Debug kill player
+```json
+{
+  "type": "debugKillPlayer",
+  "playerId": "uuid"
+}
+```
+
+#### Debug state update
+```json
+{
+  "type": "debugState",
+  "state": {
+    "players": [],
+    "bullets": [],
+    "kills": [],
+    "timestamp": 1234567890
   }
 }
 ```

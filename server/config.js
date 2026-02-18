@@ -12,7 +12,7 @@ const config = {
     shootCooldownMs: 100
   },
   input: {
-    lookSensitivity: 0.01
+    lookSensitivity: 0.006
   },
   killLog: {
     path: 'kills.log',
