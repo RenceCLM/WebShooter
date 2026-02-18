@@ -129,7 +129,8 @@ wss.on('connection', (ws) => {
           config: {
             arenaHalfSize: config.arena.halfSize,
             shootCooldownMs: config.combat.shootCooldownMs,
-            maxHealth: config.player.maxHealth
+            maxHealth: config.player.maxHealth,
+            lookSensitivity: config.input.lookSensitivity
           }
         }));
       } else if (message.type === 'move') {

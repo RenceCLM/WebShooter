@@ -9,7 +9,10 @@ const config = {
   combat: {
     bulletSpeed: 1,
     bulletDamage: 25,
-    shootCooldownMs: 1000
+    shootCooldownMs: 100
+  },
+  input: {
+    lookSensitivity: 0.01
   },
   killLog: {
     path: 'kills.log',

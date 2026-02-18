@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
     <title>WebShooter - 3D Multiplayer Game</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -57,26 +57,26 @@
             <strong>F3</strong> - Show/Hide Debug<br>
             <strong>Tab</strong> - Scoreboard<br>
             <strong>F1</strong> - Show/Hide Controls<br>
-            <strong>Mobile</strong> - On-screen controls + Menu<br>
+            <strong>Mobile</strong> - Left drag move / Right drag aim<br>
             <strong>Esc</strong> - Unlock Mouse</p>
         </div>
     </div>
 
     <div id="mobileControls" class="mobile-controls">
-        <div class="mobile-dpad">
-            <div class="dpad-btn up" data-dir="w"></div>
-            <div class="dpad-btn left" data-dir="a"></div>
-            <div class="dpad-btn right" data-dir="d"></div>
-            <div class="dpad-btn down" data-dir="s"></div>
+        <div id="mobileLeftZone" class="touch-zone left">
+            <div id="leftJoystick" class="left-joystick">
+                <div id="leftJoystickKnob" class="left-joystick-knob"></div>
+            </div>
         </div>
-        <button id="mobileFire" class="mobile-fire" aria-label="Fire"></button>
+        <div id="mobileRightZone" class="touch-zone right"></div>
+        <button id="mobileFire" class="mobile-fire" aria-label="Fire">⌯⁍</button>
         <details id="mobileMenu" class="mobile-menu">
             <summary>Menu</summary>
             <div class="mobile-menu-items">
-                <button data-toggle="playerInfo">Toggle Info</button>
-                <button data-toggle="instructions">Toggle Controls</button>
-                <button data-toggle="leaderboard">Toggle Scoreboard</button>
-                <button data-toggle="debugOverlay">Toggle Debug</button>
+                <button data-toggle="playerInfo">Show/Hide Info</button>
+                <button data-toggle="instructions">Show/Hide Controls</button>
+                <button data-toggle="leaderboard">Show/Hide Scoreboard</button>
+                <button data-toggle="debugOverlay">Show/Hide Debug</button>
             </div>
         </details>
     </div>

@@ -7,6 +7,14 @@ class InputManager {
     this.lastMouseX = 0;
     this.lastMouseY = 0;
     this.debugMode = false;
+    this.isMobile = window.matchMedia('(pointer: coarse)').matches || /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+    this.mobileMoveVector = { x: 0, z: 0 };
+    this.leftTouchId = null;
+    this.rightTouchId = null;
+    this.leftTouchOrigin = { x: 0, y: 0 };
+    this.rightLastTouch = { x: 0, y: 0 };
+    this.joystickMaxDistance = 40;
+    this.lookSensitivity = 0.002;
 
     this.setupEventListeners();
   }
@@ -80,25 +88,7 @@ class InputManager {
       }
     });
 
-    // Mobile touch controls
-    const dpadButtons = document.querySelectorAll('.dpad-btn');
-    dpadButtons.forEach((button) => {
-      const dir = button.getAttribute('data-dir');
-      if (!dir) {
-        return;
-      }
-      const press = (event) => {
-        event.preventDefault();
-        this.keys[dir] = true;
-      };
-      const release = (event) => {
-        event.preventDefault();
-        this.keys[dir] = false;
-      };
-      button.addEventListener('touchstart', press, { passive: false });
-      button.addEventListener('touchend', release, { passive: false });
-      button.addEventListener('touchcancel', release, { passive: false });
-    });
+    this.setupMobileTouchControls();
 
     const fireButton = document.getElementById('mobileFire');
     if (fireButton) {
@@ -116,12 +106,147 @@ class InputManager {
     }
   }
 
+  setupMobileTouchControls() {
+    const leftZone = document.getElementById('mobileLeftZone');
+    const rightZone = document.getElementById('mobileRightZone');
+    const leftJoystick = document.getElementById('leftJoystick');
+    const leftJoystickKnob = document.getElementById('leftJoystickKnob');
+
+    if (!leftZone || !rightZone || !leftJoystick || !leftJoystickKnob) {
+      return;
+    }
+
+    const findTouchById = (touchList, id) => {
+      for (let i = 0; i < touchList.length; i += 1) {
+        if (touchList[i].identifier === id) {
+          return touchList[i];
+        }
+      }
+      return null;
+    };
+
+    const updateLeftJoystick = (touch) => {
+      const rawX = touch.clientX - this.leftTouchOrigin.x;
+      const rawY = touch.clientY - this.leftTouchOrigin.y;
+      const distance = Math.hypot(rawX, rawY);
+      const scale = distance > this.joystickMaxDistance ? this.joystickMaxDistance / distance : 1;
+      const offsetX = rawX * scale;
+      const offsetY = rawY * scale;
+
+      this.mobileMoveVector.x = offsetX / this.joystickMaxDistance;
+      this.mobileMoveVector.z = -offsetY / this.joystickMaxDistance;
+      leftJoystickKnob.style.transform = `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px))`;
+    };
+
+    const resetLeftJoystick = () => {
+      this.leftTouchId = null;
+      this.mobileMoveVector.x = 0;
+      this.mobileMoveVector.z = 0;
+      leftJoystick.classList.remove('show');
+      leftJoystickKnob.style.transform = 'translate(-50%, -50%)';
+    };
+
+    leftZone.addEventListener('touchstart', (event) => {
+      if (this.leftTouchId !== null || event.changedTouches.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const touch = event.changedTouches[0];
+      this.leftTouchId = touch.identifier;
+      this.leftTouchOrigin.x = touch.clientX;
+      this.leftTouchOrigin.y = touch.clientY;
+      leftJoystick.style.left = `${touch.clientX}px`;
+      leftJoystick.style.top = `${touch.clientY}px`;
+      leftJoystick.classList.add('show');
+      updateLeftJoystick(touch);
+    }, { passive: false });
+
+    leftZone.addEventListener('touchmove', (event) => {
+      if (this.leftTouchId === null) {
+        return;
+      }
+
+      const touch = findTouchById(event.touches, this.leftTouchId);
+      if (!touch) {
+        return;
+      }
+
+      event.preventDefault();
+      updateLeftJoystick(touch);
+    }, { passive: false });
+
+    const handleLeftRelease = (event) => {
+      if (this.leftTouchId === null) {
+        return;
+      }
+
+      const released = findTouchById(event.changedTouches, this.leftTouchId);
+      if (!released) {
+        return;
+      }
+
+      event.preventDefault();
+      resetLeftJoystick();
+    };
+
+    leftZone.addEventListener('touchend', handleLeftRelease, { passive: false });
+    leftZone.addEventListener('touchcancel', handleLeftRelease, { passive: false });
+
+    rightZone.addEventListener('touchstart', (event) => {
+      if (this.rightTouchId !== null || event.changedTouches.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const touch = event.changedTouches[0];
+      this.rightTouchId = touch.identifier;
+      this.rightLastTouch.x = touch.clientX;
+      this.rightLastTouch.y = touch.clientY;
+    }, { passive: false });
+
+    rightZone.addEventListener('touchmove', (event) => {
+      if (this.rightTouchId === null) {
+        return;
+      }
+
+      const touch = findTouchById(event.touches, this.rightTouchId);
+      if (!touch) {
+        return;
+      }
+
+      event.preventDefault();
+      this.mouseDelta.x += touch.clientX - this.rightLastTouch.x;
+      this.mouseDelta.y += touch.clientY - this.rightLastTouch.y;
+      this.rightLastTouch.x = touch.clientX;
+      this.rightLastTouch.y = touch.clientY;
+    }, { passive: false });
+
+    const handleRightRelease = (event) => {
+      if (this.rightTouchId === null) {
+        return;
+      }
+
+      const released = findTouchById(event.changedTouches, this.rightTouchId);
+      if (!released) {
+        return;
+      }
+
+      event.preventDefault();
+      this.rightTouchId = null;
+    };
+
+    rightZone.addEventListener('touchend', handleRightRelease, { passive: false });
+    rightZone.addEventListener('touchcancel', handleRightRelease, { passive: false });
+  }
+
   isMoving() {
-    return this.keys['w'] || this.keys['a'] || this.keys['s'] || this.keys['d'];
+    const mobileMoving = Math.abs(this.mobileMoveVector.x) > 0.01 || Math.abs(this.mobileMoveVector.z) > 0.01;
+    return this.keys['w'] || this.keys['a'] || this.keys['s'] || this.keys['d'] || mobileMoving;
   }
 
   getMovementDirection() {
-    const direction = { x: 0, z: 0 };
+    const direction = { x: this.mobileMoveVector.x, z: this.mobileMoveVector.z };
 
     if (this.keys['w']) direction.z += 1;  // W = forward
     if (this.keys['s']) direction.z -= 1;  // S = backward
@@ -139,12 +264,21 @@ class InputManager {
   }
 
   getMouseRotation() {
-    // Lower sensitivity for smoother controls
-    const sensitivity = document.pointerLockElement ? 0.003 : 0.002;
+    const sensitivity = document.pointerLockElement
+      ? this.lookSensitivity * 1.5
+      : this.lookSensitivity;
     return {
       x: this.mouseDelta.y * sensitivity,
       y: this.mouseDelta.x * sensitivity
     };
+  }
+
+  setLookSensitivity(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return;
+    }
+    this.lookSensitivity = parsed;
   }
 
   resetMouseDelta() {

@@ -13,7 +13,8 @@ class GameEngine {
     this.showAllPlayers = false;
     this.showAllBullets = false;
     this.leaderboardVisible = false;
-    this.controlsVisible = true;
+    this.controlsVisible = false;
+    this.lastImmersiveAttempt = 0;
     
     // Death/Kill - CRITICAL
     this.isDead = false;
@@ -26,7 +27,8 @@ class GameEngine {
     this.serverConfig = {
       arenaHalfSize: 80,
       shootCooldownMs: 100,
-      maxHealth: 100
+      maxHealth: 100,
+      lookSensitivity: 0.002
     };
   }
 
@@ -43,6 +45,8 @@ class GameEngine {
     this.setupLeaderboardHotkeys();
     this.setupControlsHotkeys();
     this.setupMobileMenu();
+    this.applyControlsVisibility();
+    this.setupMobileExperience();
 
     playerManager.setScene(this.scene);
     playerManager.setCamera(this.camera);
@@ -51,6 +55,62 @@ class GameEngine {
 
     this.gameLoop();
     window.addEventListener('resize', () => this.onWindowResize());
+  }
+
+  applyControlsVisibility() {
+    const controls = document.getElementById('instructions');
+    if (!controls) {
+      return;
+    }
+    controls.style.display = this.controlsVisible ? 'block' : 'none';
+  }
+
+  setupMobileExperience() {
+    if (!input.isMobile) {
+      return;
+    }
+
+    document.body.classList.add('mobile');
+    this.controlsVisible = false;
+    this.applyControlsVisibility();
+
+    const tryImmersive = () => {
+      this.requestMobileFullscreenLandscape();
+    };
+
+    this.requestMobileFullscreenLandscape();
+    window.addEventListener('touchstart', tryImmersive, { passive: true });
+    window.addEventListener('click', tryImmersive);
+    window.addEventListener('orientationchange', tryImmersive);
+  }
+
+  async requestMobileFullscreenLandscape() {
+    if (!input.isMobile) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastImmersiveAttempt < 500) {
+      return;
+    }
+    this.lastImmersiveAttempt = now;
+
+    const root = document.documentElement;
+    if (!document.fullscreenElement && typeof root.requestFullscreen === 'function') {
+      try {
+        await root.requestFullscreen();
+      } catch (error) {
+        // Ignore gesture-related rejections and retry on next interaction
+      }
+    }
+
+    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+      try {
+        await screen.orientation.lock('landscape');
+      } catch (error) {
+        // Ignore unsupported/permission failures
+      }
+    }
   }
 
   setupScene() {
@@ -124,6 +184,9 @@ class GameEngine {
       if (message && message.config) {
         this.serverConfig = message.config;
         this.shootCooldown = message.config.shootCooldownMs;
+        if (typeof message.config.lookSensitivity === 'number') {
+          input.setLookSensitivity(message.config.lookSensitivity);
+        }
       }
     });
 
@@ -291,10 +354,7 @@ class GameEngine {
       }
       e.preventDefault();
       this.controlsVisible = !this.controlsVisible;
-      const controls = document.getElementById('instructions');
-      if (controls) {
-        controls.style.display = this.controlsVisible ? 'block' : 'none';
-      }
+      this.applyControlsVisibility();
     });
   }
 
@@ -303,6 +363,17 @@ class GameEngine {
     if (!menu) {
       return;
     }
+
+    const syncMenuState = () => {
+      if (!input.isMobile) {
+        document.body.classList.remove('menu-open');
+        return;
+      }
+      document.body.classList.toggle('menu-open', menu.open);
+    };
+
+    menu.addEventListener('toggle', syncMenuState);
+    syncMenuState();
 
     menu.addEventListener('click', (event) => {
       const target = event.target;
@@ -339,6 +410,9 @@ class GameEngine {
       if (element) {
         const isHidden = element.style.display === 'none';
         element.style.display = isHidden ? 'block' : 'none';
+        if (toggleId === 'instructions') {
+          this.controlsVisible = isHidden;
+        }
       }
     });
   }
@@ -404,23 +478,46 @@ class GameEngine {
     }
 
     const entries = this.buildLeaderboardStats();
-    let html = '<div class="leaderboard-title">Kills / Deaths<span>Hold TAB to view</span></div>';
-    html += '<table class="leaderboard-table">';
-    html += '<thead><tr><th class="leaderboard-rank">#</th><th>Player</th><th class="leaderboard-kd">K</th><th class="leaderboard-kd">D</th></tr></thead>';
-    html += '<tbody>';
-    if (entries.length === 0) {
-      html += '<tr><td colspan="4">No kills yet</td></tr>';
+    let html = '';
+
+    if (input.isMobile) {
+      board.classList.add('mobile-vertical');
+
+      html += '<div class="leaderboard-title">Scoreboard<span>Show/Hide in Menu</span></div>';
+      html += '<div class="leaderboard-mobile-list">';
+      if (entries.length === 0) {
+        html += '<div class="leaderboard-mobile-empty">No kills yet</div>';
+      } else {
+        entries.forEach((entry, index) => {
+          html += '<div class="leaderboard-mobile-item">' +
+            `<div class="leaderboard-mobile-rank">#${index + 1}</div>` +
+            `<div class="leaderboard-mobile-name">${entry.name}</div>` +
+            `<div class="leaderboard-mobile-kd">K ${entry.kills} • D ${entry.deaths}</div>` +
+            '</div>';
+        });
+      }
+      html += '</div>';
     } else {
-      entries.forEach((entry, index) => {
-        html += '<tr>' +
-          `<td class="leaderboard-rank">${index + 1}</td>` +
-          `<td>${entry.name}</td>` +
-          `<td class="leaderboard-kd">${entry.kills}</td>` +
-          `<td class="leaderboard-kd">${entry.deaths}</td>` +
-          '</tr>';
-      });
+      board.classList.remove('mobile-vertical');
+
+      html += '<div class="leaderboard-title">Kills / Deaths<span>Hold TAB to view</span></div>';
+      html += '<table class="leaderboard-table">';
+      html += '<thead><tr><th class="leaderboard-rank">#</th><th>Player</th><th class="leaderboard-kd">K</th><th class="leaderboard-kd">D</th></tr></thead>';
+      html += '<tbody>';
+      if (entries.length === 0) {
+        html += '<tr><td colspan="4">No kills yet</td></tr>';
+      } else {
+        entries.forEach((entry, index) => {
+          html += '<tr>' +
+            `<td class="leaderboard-rank">${index + 1}</td>` +
+            `<td>${entry.name}</td>` +
+            `<td class="leaderboard-kd">${entry.kills}</td>` +
+            `<td class="leaderboard-kd">${entry.deaths}</td>` +
+            '</tr>';
+        });
+      }
+      html += '</tbody></table>';
     }
-    html += '</tbody></table>';
 
     board.innerHTML = html;
     board.classList.add('show');
