@@ -10,6 +10,7 @@ class PlayerManager {
     this.camera = null;
     this._tempQuat = new THREE.Quaternion();
     this._tempQuatInv = new THREE.Quaternion();
+    this.interpolationDelayMs = 100;
   }
 
   setScene(scene) {
@@ -44,7 +45,8 @@ class PlayerManager {
       rotation: { x: 0, y: 0, z: 0 },
       health: 100,
       score: 0,
-      mesh: null
+      mesh: null,
+      snapshots: []
     };
 
     this.remotePlayers.set(playerId, player);
@@ -119,7 +121,7 @@ class PlayerManager {
     this.nameLabels.set(playerId, sprite);
   }
 
-  updateRemotePlayer(playerId, name, color, position, rotation, health, score) {
+  updateRemotePlayer(playerId, name, color, position, rotation, health, score, serverTime) {
     const player = this.remotePlayers.get(playerId);
     if (player) {
       if (color && player.color !== color) {
@@ -146,6 +148,19 @@ class PlayerManager {
       player.health = health;
       player.score = score;
 
+      const snapshotTime = Number.isFinite(serverTime) ? serverTime : Date.now();
+      player.snapshots.push({
+        time: snapshotTime,
+        position: { ...position },
+        rotation: { ...rotation },
+        health,
+        score
+      });
+
+      if (player.snapshots.length > 60) {
+        player.snapshots.splice(0, player.snapshots.length - 60);
+      }
+
       if (health <= 0) {
         const deadMesh = this.playerMeshes.get(playerId);
         if (deadMesh) {
@@ -164,10 +179,12 @@ class PlayerManager {
 
       const mesh = this.playerMeshes.get(playerId);
       if (mesh) {
-        mesh.position.set(position.x, position.y, position.z);
-        mesh.rotation.x = rotation.x;
-        mesh.rotation.y = rotation.y;
-        mesh.rotation.z = rotation.z;
+        if (player.snapshots.length <= 1) {
+          mesh.position.set(position.x, position.y, position.z);
+          mesh.rotation.x = rotation.x;
+          mesh.rotation.y = rotation.y;
+          mesh.rotation.z = rotation.z;
+        }
 
         // Update health bar
         const healthBarData = this.healthBars.get(playerId);
@@ -194,6 +211,44 @@ class PlayerManager {
         this._tempQuat.copy(this.camera.quaternion);
         healthBarData.mesh.quaternion.copy(this._tempQuatInv.multiply(this._tempQuat));
       }
+    }
+  }
+
+  updateRemoteInterpolation() {
+    const renderTime = Date.now() - this.interpolationDelayMs;
+
+    for (const [playerId, player] of this.remotePlayers) {
+      const mesh = this.playerMeshes.get(playerId);
+      if (!mesh || !player.snapshots || player.snapshots.length === 0) {
+        continue;
+      }
+
+      const snapshots = player.snapshots;
+
+      while (snapshots.length >= 2 && snapshots[1].time <= renderTime) {
+        snapshots.shift();
+      }
+
+      if (snapshots.length === 1 || snapshots[0].time >= renderTime) {
+        const snapshot = snapshots[0];
+        mesh.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+        mesh.rotation.x = snapshot.rotation.x;
+        mesh.rotation.y = snapshot.rotation.y;
+        mesh.rotation.z = snapshot.rotation.z;
+        continue;
+      }
+
+      const older = snapshots[0];
+      const newer = snapshots[1];
+      const span = newer.time - older.time;
+      const t = span <= 0 ? 0 : Math.max(0, Math.min(1, (renderTime - older.time) / span));
+
+      mesh.position.x = older.position.x + (newer.position.x - older.position.x) * t;
+      mesh.position.y = older.position.y + (newer.position.y - older.position.y) * t;
+      mesh.position.z = older.position.z + (newer.position.z - older.position.z) * t;
+      mesh.rotation.x = older.rotation.x + (newer.rotation.x - older.rotation.x) * t;
+      mesh.rotation.y = older.rotation.y + (newer.rotation.y - older.rotation.y) * t;
+      mesh.rotation.z = older.rotation.z + (newer.rotation.z - older.rotation.z) * t;
     }
   }
 

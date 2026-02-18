@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <title>WebShooter - Bot Client</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #04070f;
+      color: #9de9ff;
+      font-family: 'Courier New', monospace;
+    }
+
+    #gameFrame {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #000;
+    }
+
+    #botPanel {
+      position: fixed;
+      top: 8px;
+      right: 8px;
+      width: min(360px, 40vw);
+      max-height: 72vh;
+      overflow: hidden;
+      border: 2px solid rgba(255, 136, 0, 0.8);
+      border-radius: 8px;
+      background: rgba(10, 14, 39, 0.78);
+      z-index: 2400;
+      pointer-events: auto;
+      box-shadow: 0 0 24px rgba(0, 136, 255, 0.3);
+    }
+
+    #botPanelHeader {
+      padding: 8px 10px;
+      color: #ff8800;
+      font-weight: bold;
+      border-bottom: 1px solid rgba(0, 204, 255, 0.4);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    #botPanelHeader button {
+      border: 1px solid rgba(0, 204, 255, 0.8);
+      background: transparent;
+      color: #00ccff;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: inherit;
+      font-size: 10px;
+      cursor: pointer;
+    }
+
+    #botStats {
+      padding: 8px 10px;
+      color: #00ccff;
+      font-size: 11px;
+      line-height: 1.4;
+      border-bottom: 1px solid rgba(0, 204, 255, 0.25);
+    }
+
+    #botStats .line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    #botStats .label {
+      color: #ff8800;
+      min-width: 92px;
+    }
+
+    #botStats .value {
+      color: #66ffee;
+      text-align: right;
+    }
+
+    #jsonLogWrap {
+      padding: 8px 10px;
+    }
+
+    #jsonLogTitle {
+      color: #ff8800;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    #jsonLog {
+      width: 100%;
+      height: min(38vh, 320px);
+      overflow: auto;
+      border: 1px solid rgba(0, 204, 255, 0.35);
+      border-radius: 6px;
+      background: rgba(5, 8, 16, 0.75);
+      padding: 8px;
+      color: #9de9ff;
+      font-size: 10px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-sizing: border-box;
+    }
+
+    #helperText {
+      padding: 0 10px 8px;
+      color: #7fbad0;
+      font-size: 10px;
+    }
+
+    @media (pointer: coarse), (max-width: 900px) {
+      #botPanel {
+        width: min(44vw, 280px);
+        max-height: 56vh;
+      }
+
+      #jsonLog {
+        height: min(30vh, 220px);
+        font-size: 9px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <iframe id="gameFrame" src="/" title="WebShooter Game"></iframe>
+
+  <div id="botPanel">
+    <div id="botPanelHeader">
+      <span>Training Bot Overlay</span>
+      <button id="botToggleBtn">Pause (P)</button>
+    </div>
+    <div id="botStats">
+      <div class="line"><span class="label">Status</span><span class="value" id="botStatus">Loading...</span></div>
+      <div class="line"><span class="label">Target</span><span class="value" id="botTarget">-</span></div>
+      <div class="line"><span class="label">Distance</span><span class="value" id="botTargetDist">-</span></div>
+      <div class="line"><span class="label">Threat Bullets</span><span class="value" id="botThreatCount">0</span></div>
+      <div class="line"><span class="label">Bot Active</span><span class="value" id="botActive">YES</span></div>
+    </div>
+    <div id="jsonLogWrap">
+      <div id="jsonLogTitle">Outgoing JSON (client → server)</div>
+      <div id="jsonLog"></div>
+    </div>
+    <div id="helperText">Hotkeys: P pause/resume, 0 teleport behind nearest target.</div>
+  </div>
+
+  <script>
+    (function initSelfContainedBotPage() {
+      const frame = document.getElementById('gameFrame');
+      const jsonLogEl = document.getElementById('jsonLog');
+      const botStatusEl = document.getElementById('botStatus');
+      const botTargetEl = document.getElementById('botTarget');
+      const botTargetDistEl = document.getElementById('botTargetDist');
+      const botThreatCountEl = document.getElementById('botThreatCount');
+      const botActiveEl = document.getElementById('botActive');
+      const botToggleBtn = document.getElementById('botToggleBtn');
+
+      const botState = {
+        active: true,
+        lastStepTime: performance.now(),
+        motionAngle: Math.random() * Math.PI * 2,
+        motionStrength: 1,
+        motionChangeAt: 0,
+        jitterSeed: Math.random() * 1000,
+        frameKeyHooked: false,
+        patchApplied: false,
+      };
+
+      function getGameWindow() {
+        return frame && frame.contentWindow ? frame.contentWindow : null;
+      }
+
+      function resolveIframeBinding(gameWindow, symbolName) {
+        if (!gameWindow || !symbolName) {
+          return null;
+        }
+
+        if (typeof gameWindow[symbolName] !== 'undefined' && gameWindow[symbolName] !== null) {
+          return gameWindow[symbolName];
+        }
+
+        try {
+          const value = gameWindow.eval(`typeof ${symbolName} !== 'undefined' ? ${symbolName} : null`);
+          return value || null;
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function getRuntime() {
+        const gameWindow = getGameWindow();
+        if (!gameWindow) {
+          return null;
+        }
+
+        const network = resolveIframeBinding(gameWindow, 'network');
+        const game = resolveIframeBinding(gameWindow, 'game');
+        const playerManager = resolveIframeBinding(gameWindow, 'playerManager');
+
+        if (!network || !game || !playerManager) {
+          return null;
+        }
+        return { gameWindow, network, game, playerManager };
+      }
+
+      function pushLog(payload) {
+        const line = `${new Date().toLocaleTimeString()} ${JSON.stringify(payload)}`;
+        jsonLogEl.textContent = `${line}\n${jsonLogEl.textContent}`.slice(0, 26000);
+      }
+
+      function ensureNetworkPatched(runtime) {
+        if (!runtime || !runtime.network || runtime.network.__botSendPatched) {
+          return;
+        }
+        const originalSendMessage = runtime.network.sendMessage.bind(runtime.network);
+        runtime.network.sendMessage = function patchedSendMessage(type, data) {
+          pushLog({ type, ...(data || {}) });
+          originalSendMessage(type, data);
+        };
+        runtime.network.__botSendPatched = true;
+        botState.patchApplied = true;
+      }
+
+      function getLocalPlayer(runtime) {
+        return runtime && runtime.playerManager && runtime.playerManager.localPlayer
+          ? runtime.playerManager.localPlayer
+          : null;
+      }
+
+      function getNearestEnemy(runtime, me) {
+        const players = runtime && runtime.game && Array.isArray(runtime.game.lastStatePlayers)
+          ? runtime.game.lastStatePlayers
+          : [];
+
+        let best = null;
+        let bestDistance = Infinity;
+
+        for (const player of players) {
+          if (!player || !me || player.id === me.id || player.health <= 0) {
+            continue;
+          }
+          const dx = player.position.x - me.position.x;
+          const dy = player.position.y - me.position.y;
+          const dz = player.position.z - me.position.z;
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = player;
+          }
+        }
+
+        return { target: best, distance: bestDistance };
+      }
+
+      function getAimRotation(fromPosition, toPosition) {
+        const dx = toPosition.x - fromPosition.x;
+        const dy = toPosition.y - fromPosition.y;
+        const dz = toPosition.z - fromPosition.z;
+        const horizontal = Math.sqrt(dx * dx + dz * dz);
+
+        const yaw = Math.atan2(-dx, -dz);
+        const pitch = Math.atan2(dy, horizontal);
+
+        return {
+          x: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch)),
+          y: yaw,
+          z: 0
+        };
+      }
+
+      function getThreatBullets(runtime, me) {
+        const bullets = runtime && runtime.game && Array.isArray(runtime.game.serverBullets)
+          ? runtime.game.serverBullets
+          : [];
+        const threats = [];
+
+        for (const bullet of bullets) {
+          if (!bullet || bullet.playerId === me.id) {
+            continue;
+          }
+
+          const dirX = bullet.direction.x;
+          const dirZ = bullet.direction.z;
+          const dirLen = Math.hypot(dirX, dirZ) || 1;
+          const nx = dirX / dirLen;
+          const nz = dirZ / dirLen;
+
+          const relX = me.position.x - bullet.position.x;
+          const relZ = me.position.z - bullet.position.z;
+
+          const along = relX * nx + relZ * nz;
+          if (along < 0 || along > 26) {
+            continue;
+          }
+
+          const perpX = relX - nx * along;
+          const perpZ = relZ - nz * along;
+          const perpDist = Math.hypot(perpX, perpZ);
+
+          if (perpDist < 3.8) {
+            threats.push({ bullet, nx, nz, along, perpDist });
+          }
+        }
+
+        threats.sort((a, b) => a.along - b.along);
+        return threats;
+      }
+
+      function updateSporadicVector(now) {
+        if (now >= botState.motionChangeAt) {
+          botState.motionAngle = Math.random() * Math.PI * 2;
+          botState.motionStrength = 0.55 + Math.random() * 0.9;
+          botState.motionChangeAt = now + 240 + Math.random() * 880;
+        }
+        return {
+          x: Math.cos(botState.motionAngle) * botState.motionStrength,
+          z: Math.sin(botState.motionAngle) * botState.motionStrength
+        };
+      }
+
+      function combineMovement(now, me, target, threats) {
+        const randomVec = updateSporadicVector(now);
+        let moveX = randomVec.x;
+        let moveZ = randomVec.z;
+
+        if (target) {
+          const tx = target.position.x - me.position.x;
+          const tz = target.position.z - me.position.z;
+          const tLen = Math.hypot(tx, tz) || 1;
+          const px = -tz / tLen;
+          const pz = tx / tLen;
+          const side = Math.sin(now * 0.006 + botState.jitterSeed) >= 0 ? 1 : -1;
+          moveX = moveX * 0.45 + px * side * 0.8;
+          moveZ = moveZ * 0.45 + pz * side * 0.8;
+        }
+
+        if (threats.length > 0) {
+          let dodgeX = 0;
+          let dodgeZ = 0;
+          for (const threat of threats.slice(0, 3)) {
+            const leftX = -threat.nz;
+            const leftZ = threat.nx;
+            const rightX = threat.nz;
+            const rightZ = -threat.nx;
+
+            const relX = me.position.x - threat.bullet.position.x;
+            const relZ = me.position.z - threat.bullet.position.z;
+            const leftScore = relX * leftX + relZ * leftZ;
+            const rightScore = relX * rightX + relZ * rightZ;
+            const useLeft = leftScore >= rightScore;
+
+            const weight = 1 / Math.max(0.25, threat.along);
+            dodgeX += (useLeft ? leftX : rightX) * weight;
+            dodgeZ += (useLeft ? leftZ : rightZ) * weight;
+          }
+
+          moveX = moveX * 0.35 + dodgeX * 1.65;
+          moveZ = moveZ * 0.35 + dodgeZ * 1.65;
+        }
+
+        const len = Math.hypot(moveX, moveZ) || 1;
+        return { x: moveX / len, z: moveZ / len };
+      }
+
+      function clampArena(runtime, pos) {
+        const half = runtime && runtime.game && runtime.game.serverConfig && Number.isFinite(runtime.game.serverConfig.arenaHalfSize)
+          ? runtime.game.serverConfig.arenaHalfSize
+          : 80;
+        return {
+          x: Math.max(-half, Math.min(half, pos.x)),
+          y: 1,
+          z: Math.max(-half, Math.min(half, pos.z))
+        };
+      }
+
+      function sendBotMove(runtime, position, rotation) {
+        if (!runtime || !runtime.network || !runtime.network.isConnected) {
+          return;
+        }
+
+        let sequence = null;
+        if (typeof runtime.game.nextInputSequence === 'number') {
+          sequence = runtime.game.nextInputSequence++;
+        }
+
+        runtime.network.sendMove(position, rotation, sequence);
+
+        if (sequence !== null && Array.isArray(runtime.game.pendingInputs)) {
+          runtime.game.pendingInputs.push({
+            sequence,
+            position: { ...position },
+            rotation: { ...rotation },
+            timestamp: Date.now()
+          });
+          if (runtime.game.pendingInputs.length > 120) {
+            runtime.game.pendingInputs.splice(0, runtime.game.pendingInputs.length - 120);
+          }
+        }
+      }
+
+      function teleportBehindNearest() {
+        const runtime = getRuntime();
+        if (!runtime) {
+          return;
+        }
+
+        const me = getLocalPlayer(runtime);
+        if (!me) {
+          return;
+        }
+
+        const nearest = getNearestEnemy(runtime, me);
+        if (!nearest.target) {
+          return;
+        }
+
+        const target = nearest.target;
+        const targetYaw = Number.isFinite(target.rotation && target.rotation.y) ? target.rotation.y : 0;
+        const fx = -Math.sin(targetYaw);
+        const fz = -Math.cos(targetYaw);
+        const behindDistance = 4.5;
+
+        const newPos = clampArena(runtime, {
+          x: target.position.x - fx * behindDistance,
+          y: 1,
+          z: target.position.z - fz * behindDistance
+        });
+
+        const rot = getAimRotation(newPos, target.position);
+
+        me.position.x = newPos.x;
+        me.position.y = newPos.y;
+        me.position.z = newPos.z;
+        me.rotation.x = rot.x;
+        me.rotation.y = rot.y;
+
+        sendBotMove(runtime, newPos, rot);
+      }
+
+      function setActive(active) {
+        botState.active = Boolean(active);
+        botActiveEl.textContent = botState.active ? 'YES' : 'NO';
+        botToggleBtn.textContent = botState.active ? 'Pause (P)' : 'Resume (P)';
+      }
+
+      function toggleActive() {
+        setActive(!botState.active);
+      }
+
+      function handleHotkeys(event) {
+        if (event.key.toLowerCase() === 'p') {
+          event.preventDefault();
+          toggleActive();
+        } else if (event.key === '0') {
+          event.preventDefault();
+          teleportBehindNearest();
+        }
+      }
+
+      function ensureFrameKeyListener() {
+        if (botState.frameKeyHooked) {
+          return;
+        }
+        const gameWindow = getGameWindow();
+        if (!gameWindow || !gameWindow.document) {
+          return;
+        }
+
+        gameWindow.document.addEventListener('keydown', handleHotkeys);
+        botState.frameKeyHooked = true;
+      }
+
+      function botTick() {
+        const runtime = getRuntime();
+        if (!runtime) {
+          botStatusEl.textContent = 'Waiting for game scripts...';
+          return;
+        }
+
+        ensureNetworkPatched(runtime);
+        ensureFrameKeyListener();
+
+        const me = getLocalPlayer(runtime);
+        if (!runtime.network.isConnected || !me) {
+          botStatusEl.textContent = 'Waiting for server/player...';
+          return;
+        }
+
+        if (!botState.active) {
+          botStatusEl.textContent = 'Paused';
+          return;
+        }
+
+        const now = performance.now();
+        const dt = Math.min(0.08, Math.max(0.001, (now - botState.lastStepTime) / 1000));
+        botState.lastStepTime = now;
+
+        const nearest = getNearestEnemy(runtime, me);
+        const target = nearest.target;
+        const threats = getThreatBullets(runtime, me);
+        const moveDir = combineMovement(now, me, target, threats);
+
+        const speed = 22;
+        const desiredPos = clampArena(runtime, {
+          x: me.position.x + moveDir.x * speed * dt,
+          y: 1,
+          z: me.position.z + moveDir.z * speed * dt
+        });
+
+        const rot = target
+          ? getAimRotation(desiredPos, target.position)
+          : (me.rotation || { x: 0, y: 0, z: 0 });
+
+        me.position.x = desiredPos.x;
+        me.position.z = desiredPos.z;
+        me.rotation.x = rot.x;
+        me.rotation.y = rot.y;
+
+        sendBotMove(runtime, desiredPos, rot);
+
+        botStatusEl.textContent = 'Running';
+        botTargetEl.textContent = target ? target.name : '-';
+        botTargetDistEl.textContent = target ? nearest.distance.toFixed(1) : '-';
+        botThreatCountEl.textContent = String(threats.length);
+        botActiveEl.textContent = botState.active ? 'YES' : 'NO';
+      }
+
+      botToggleBtn.addEventListener('click', toggleActive);
+      document.addEventListener('keydown', handleHotkeys);
+
+      frame.addEventListener('load', () => {
+        botState.frameKeyHooked = false;
+        botState.patchApplied = false;
+        botStatusEl.textContent = 'Frame loaded';
+      });
+
+      setInterval(botTick, 50);
+    })();
+  </script>
+</body>
+</html>

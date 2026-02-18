@@ -13,22 +13,40 @@ class GameEngine {
     this.showAllPlayers = false;
     this.showAllBullets = false;
     this.leaderboardVisible = false;
-    this.controlsVisible = false;
+    this.controlsVisible = !input.isMobile;
     this.lastImmersiveAttempt = 0;
+    this.worldLayout = null;
+    this.worldBuilt = false;
+    this.worldGroup = null;
+    this.worldCollision = {
+      solidBoxes: [],
+      playerOnlyBoxes: [],
+      secondFloors: [],
+      ramps: []
+    };
+    this.playerRadius = 1.0;
+    this.playerHeight = 1.8;
     
     // Death/Kill - CRITICAL
     this.isDead = false;
     this.seenKills = new Set();
     this.deathScreenShown = false;
     this.pendingKillerName = null;
+    this.respawnListener = null;
+    this.localDeathTimeMs = null;
     
     // Player name
     this.playerName = null;
+    this.verboseRealtimeLogs = false;
+    this.nextInputSequence = 1;
+    this.pendingInputs = [];
     this.serverConfig = {
       arenaHalfSize: 80,
       shootCooldownMs: 100,
       maxHealth: 100,
-      lookSensitivity: 0.002
+      lookSensitivity: 0.002,
+      autoRespawn: true,
+      autoRespawnTime: 3
     };
   }
 
@@ -153,6 +171,10 @@ class GameEngine {
     const gridHelper = new THREE.GridHelper(200, 20, 0xFF8800, 0x0a0e27);
     this.scene.add(gridHelper);
 
+    this.worldGroup = new THREE.Group();
+    this.worldGroup.name = 'procedural-world';
+    this.scene.add(this.worldGroup);
+
     const skyGeometry = new THREE.SphereGeometry(300, 32, 32);
     const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x050810, side: THREE.BackSide });
     const skybox = new THREE.Mesh(skyGeometry, skyMaterial);
@@ -182,10 +204,22 @@ class GameEngine {
         this.playerName = message.name;
       }
       if (message && message.config) {
-        this.serverConfig = message.config;
+        this.serverConfig = {
+          ...this.serverConfig,
+          ...message.config
+        };
         this.shootCooldown = message.config.shootCooldownMs;
         if (typeof message.config.lookSensitivity === 'number') {
           input.setLookSensitivity(message.config.lookSensitivity);
+        }
+      }
+
+      if (message && message.worldLayout) {
+        const nextLayout = message.worldLayout;
+        const shouldRebuild = !this.worldLayout || this.worldLayout.generatedAt !== nextLayout.generatedAt;
+        if (shouldRebuild) {
+          this.worldLayout = nextLayout;
+          this.buildWorldGeometry();
         }
       }
     });
@@ -195,11 +229,9 @@ class GameEngine {
       const players = state.players || [];
       const bullets = state.bullets || [];
       const kills = state.kills || [];
+      const serverTime = Number.isFinite(message.serverTime) ? message.serverTime : Date.now();
       this.lastStatePlayers = players;
       this.lastKills = kills;
-
-      // Log every gameState
-      console.log(`\n[gameState] Players: ${players.length}, Bullets: ${bullets.length}, Kills: ${kills.length}`);
       
       // Store bullets
       this.serverBullets = bullets;
@@ -228,25 +260,32 @@ class GameEngine {
             if (!this.isDead) {
               console.log(`💀 WE DIED (health: ${player.health})`);
               this.isDead = true;
+              this.localDeathTimeMs = Number.isFinite(player.deathTime) ? player.deathTime : Date.now();
               const killerName = this.pendingKillerName || player.lastKillerName || 'Unknown';
               if (!this.deathScreenShown) {
                 this.displayDeathScreen(killerName);
               }
+            } else if (Number.isFinite(player.deathTime)) {
+              this.localDeathTimeMs = player.deathTime;
             }
           } else {
             if (this.isDead) {
               console.log(`♻️  WE RESPAWNED (health: ${player.health})`);
               this.isDead = false;
-              this.deathScreenShown = false;
+              this.localDeathTimeMs = null;
               this.pendingKillerName = null;
+              this.hideDeathScreen();
+            } else if (this.deathScreenShown) {
+              this.hideDeathScreen();
             }
           }
 
           if (playerManager.localPlayer) {
-            playerManager.localPlayer.position = player.position;
             playerManager.localPlayer.health = player.health;
             playerManager.localPlayer.score = player.score;
             playerManager.localPlayer.color = player.color;
+
+            this.reconcileLocalPlayer(player);
           }
         } else {
           remoteIds.add(player.id);
@@ -260,7 +299,8 @@ class GameEngine {
             player.position,
             player.rotation,
             player.health,
-            player.score
+            player.score,
+            serverTime
           );
         }
       }
@@ -274,22 +314,17 @@ class GameEngine {
 
       // PROCESS KILLS
       if (kills.length > 0) {
-        console.log('\n🔴🔴🔴 KILLS RECEIVED 🔴🔴🔴');
-        console.log(JSON.stringify(kills, null, 2));
-
         for (const kill of kills) {
           const killKey = `${kill.killerId}|${kill.victimId}|${kill.timestamp}`;
           
           if (this.seenKills.has(killKey)) {
-            console.log(`   ⏭️  Already saw this kill: ${killKey}`);
             continue;
           }
 
           this.seenKills.add(killKey);
-          console.log(`\n✅ NEW KILL DETECTED: ${kill.killer} → ${kill.victim}`);
-          console.log(`   Killer ID: ${kill.killerId}`);
-          console.log(`   Victim ID: ${kill.victimId}`);
-          console.log(`   My ID:     ${network.playerId}`);
+          if (this.verboseRealtimeLogs) {
+            console.log(`✅ NEW KILL DETECTED: ${kill.killer} → ${kill.victim}`);
+          }
 
           // Show kill notification for EVERYONE
           this.displayKillFeed(kill.killer, kill.victim);
@@ -548,6 +583,8 @@ class GameEngine {
       playerManager.localPlayer.nameLabel.visible = false;
     }
 
+    this.hideDeathScreen();
+
     // Show game over screen
     nameEl.textContent = killerName;
     screen.classList.add('show');
@@ -558,10 +595,21 @@ class GameEngine {
     if (hud) hud.style.display = 'none';
     if (gameContainer) gameContainer.style.display = 'none';
 
-    console.log(`✅ Death screen shown - waiting for respawn key`);
+    this.updateDeathScreenHint();
+
+    console.log(`✅ Death screen shown`);
+
+    if (this.serverConfig.autoRespawn) {
+      return;
+    }
 
     // One-time respawn listener
-    const respawn = () => {
+    this.respawnListener = () => {
+      if (!this.isDead) {
+        this.hideDeathScreen();
+        return;
+      }
+
       console.log(`🔄 Respawning...`);
       
       if (playerManager.localPlayer && playerManager.localPlayer.mesh) {
@@ -575,39 +623,543 @@ class GameEngine {
       }
 
       network.sendRespawn();
-      
-      screen.classList.remove('show');
-      screen.style.display = 'none';
-      if (hud) hud.style.display = 'block';
-      if (gameContainer) gameContainer.style.display = 'block';
       this.isDead = false;
-      this.deathScreenShown = false;
+      this.localDeathTimeMs = null;
       this.pendingKillerName = null;
-      document.removeEventListener('keydown', respawn);
-      document.removeEventListener('mousedown', respawn);
+      this.hideDeathScreen();
     };
 
-    document.addEventListener('keydown', respawn);
-    document.addEventListener('mousedown', respawn);
+    document.addEventListener('keydown', this.respawnListener);
+    document.addEventListener('mousedown', this.respawnListener);
+  }
+
+  hideDeathScreen() {
+    const screen = document.getElementById('gameOverScreen');
+    const hud = document.getElementById('hud');
+    const gameContainer = document.getElementById('gameContainer');
+
+    if (screen) {
+      screen.classList.remove('show');
+      screen.style.display = 'none';
+    }
+    if (hud) {
+      hud.style.display = 'block';
+    }
+    if (gameContainer) {
+      gameContainer.style.display = 'block';
+    }
+
+    if (playerManager.localPlayer && playerManager.localPlayer.mesh) {
+      playerManager.localPlayer.mesh.visible = true;
+    }
+    if (playerManager.localPlayer && playerManager.localPlayer.healthBar) {
+      playerManager.localPlayer.healthBar.visible = true;
+    }
+    if (playerManager.localPlayer && playerManager.localPlayer.nameLabel) {
+      playerManager.localPlayer.nameLabel.visible = true;
+    }
+
+    this.deathScreenShown = false;
+
+    if (this.respawnListener) {
+      document.removeEventListener('keydown', this.respawnListener);
+      document.removeEventListener('mousedown', this.respawnListener);
+      this.respawnListener = null;
+    }
+  }
+
+  getAutoRespawnDelayMs() {
+    const seconds = Number(this.serverConfig.autoRespawnTime);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return 0;
+    }
+    return seconds * 1000;
+  }
+
+  updateDeathScreenHint() {
+    const hintEl = document.getElementById('gameOverHint');
+    if (!hintEl || !this.deathScreenShown) {
+      return;
+    }
+
+    if (!this.serverConfig.autoRespawn) {
+      hintEl.textContent = 'Press ANY KEY to respawn';
+      return;
+    }
+
+    const delayMs = this.getAutoRespawnDelayMs();
+    const deathAt = Number.isFinite(this.localDeathTimeMs) ? this.localDeathTimeMs : Date.now();
+    const remainingMs = Math.max(0, delayMs - (Date.now() - deathAt));
+    const secondsLeft = Math.ceil(remainingMs / 1000);
+
+    if (secondsLeft > 0) {
+      hintEl.textContent = `Respawning automatically in ${secondsLeft}s`;
+    } else {
+      hintEl.textContent = 'Respawning...';
+    }
   }
 
   displayKillFeed(killer, victim) {
-    console.log(`📢 Showing kill feed: ${killer} killed ${victim}`);
-
     const notif = document.createElement('div');
     notif.className = 'kill-notification';
     notif.innerHTML = `<span class="killer-name">${killer}</span> killed <span class="victim-name">${victim}</span> <span class="points">+10</span>`;
 
     document.body.appendChild(notif);
-    console.log(`✅ Kill feed added to DOM`);
 
     setTimeout(() => {
       notif.classList.add('fadeOut');
       setTimeout(() => {
         notif.remove();
-        console.log(`   Kill feed removed`);
       }, 500);
     }, 3000);
+  }
+
+  clearWorldGeometry() {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    while (this.worldGroup.children.length > 0) {
+      const child = this.worldGroup.children[0];
+      if (!child) {
+        continue;
+      }
+      this.worldGroup.remove(child);
+      if (child.geometry) {
+        child.geometry.dispose();
+      }
+      if (Array.isArray(child.material)) {
+        child.material.forEach(material => material.dispose());
+      } else if (child.material) {
+        child.material.dispose();
+      }
+    }
+
+    this.worldBuilt = false;
+  }
+
+  createWorldBox(width, height, depth, color) {
+    const geometry = new THREE.BoxGeometry(width, height, depth);
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      metalness: 0.2,
+      roughness: 0.75
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  normalizeDirection(direction) {
+    const value = Number(direction) || 0;
+    return ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  }
+
+  clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  makeBoxAabb(centerX, centerY, centerZ, width, height, depth) {
+    return {
+      minX: centerX - width / 2,
+      maxX: centerX + width / 2,
+      minY: centerY - height / 2,
+      maxY: centerY + height / 2,
+      minZ: centerZ - depth / 2,
+      maxZ: centerZ + depth / 2
+    };
+  }
+
+  makeFlatRect(centerX, centerZ, width, depth, y) {
+    return {
+      minX: centerX - width / 2,
+      maxX: centerX + width / 2,
+      minZ: centerZ - depth / 2,
+      maxZ: centerZ + depth / 2,
+      y
+    };
+  }
+
+  addWallMesh(wall) {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    const alongX = wall.axis === 'x';
+    const width = Number.isFinite(wall.width) ? wall.width : (alongX ? wall.length : wall.thickness);
+    const depth = Number.isFinite(wall.depth) ? wall.depth : (alongX ? wall.thickness : wall.length);
+    const mesh = this.createWorldBox(width, wall.height, depth, 0x334D66);
+    mesh.position.set(wall.x, wall.height / 2, wall.z);
+    this.worldGroup.add(mesh);
+  }
+
+  addBuildingMeshes(building) {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    if (Array.isArray(building.wallSegments) && building.wallSegments.length > 0) {
+      building.wallSegments.forEach(segment => {
+        const segmentMesh = this.createWorldBox(segment.width, segment.height, segment.depth, 0x3B3350);
+        const segmentY = Number.isFinite(segment.y) ? segment.y : segment.height / 2;
+        segmentMesh.position.set(segment.x, segmentY, segment.z);
+        this.worldGroup.add(segmentMesh);
+      });
+      return;
+    }
+
+    const half = building.size / 2;
+    const thickness = building.wallThickness;
+    const height = building.wallHeight;
+    const doorWidth = Math.max(2, Math.min(building.size - 2, building.doorWidth));
+    const leftOrBottomSegment = Math.max(1, (building.size - doorWidth) / 2);
+    const wallColor = 0x3B3350;
+
+    const addSegment = (x, z, width, depth) => {
+      const segment = this.createWorldBox(width, height, depth, wallColor);
+      segment.position.set(x, height / 2, z);
+      this.worldGroup.add(segment);
+    };
+
+    const northZ = building.z - half;
+    const southZ = building.z + half;
+    const westX = building.x - half;
+    const eastX = building.x + half;
+
+    if (building.doorSide === 'north') {
+      addSegment(building.x - (doorWidth + leftOrBottomSegment) / 2, northZ, leftOrBottomSegment, thickness);
+      addSegment(building.x + (doorWidth + leftOrBottomSegment) / 2, northZ, leftOrBottomSegment, thickness);
+    } else {
+      addSegment(building.x, northZ, building.size, thickness);
+    }
+
+    if (building.doorSide === 'south') {
+      addSegment(building.x - (doorWidth + leftOrBottomSegment) / 2, southZ, leftOrBottomSegment, thickness);
+      addSegment(building.x + (doorWidth + leftOrBottomSegment) / 2, southZ, leftOrBottomSegment, thickness);
+    } else {
+      addSegment(building.x, southZ, building.size, thickness);
+    }
+
+    if (building.doorSide === 'west') {
+      addSegment(westX, building.z - (doorWidth + leftOrBottomSegment) / 2, thickness, leftOrBottomSegment);
+      addSegment(westX, building.z + (doorWidth + leftOrBottomSegment) / 2, thickness, leftOrBottomSegment);
+    } else {
+      addSegment(westX, building.z, thickness, building.size);
+    }
+
+    if (building.doorSide === 'east') {
+      addSegment(eastX, building.z - (doorWidth + leftOrBottomSegment) / 2, thickness, leftOrBottomSegment);
+      addSegment(eastX, building.z + (doorWidth + leftOrBottomSegment) / 2, thickness, leftOrBottomSegment);
+    } else {
+      addSegment(eastX, building.z, thickness, building.size);
+    }
+  }
+
+  addRampMesh(ramp) {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(ramp.length, 0);
+    shape.lineTo(ramp.length, ramp.height);
+    shape.lineTo(0, 0);
+
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth: ramp.width,
+      bevelEnabled: false,
+      steps: 1
+    });
+
+    geometry.translate(-ramp.length / 2, 0, -ramp.width / 2);
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x5A4A35,
+      metalness: 0.12,
+      roughness: 0.82
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.position.set(ramp.x, Number(ramp.startY) || 0, ramp.z);
+    mesh.rotation.y = THREE.MathUtils.degToRad(ramp.direction || 0);
+    this.worldGroup.add(mesh);
+  }
+
+  addSecondFloorMesh(floor) {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    const thickness = Number(floor.thickness) || 0.8;
+    const slab = this.createWorldBox(floor.width, thickness, floor.depth, 0x56616A);
+    slab.position.set(floor.x, floor.y - thickness / 2, floor.z);
+    this.worldGroup.add(slab);
+  }
+
+  addUpperWallMesh(segment) {
+    if (!this.worldGroup) {
+      return;
+    }
+
+    const mesh = this.createWorldBox(segment.width, segment.height, segment.depth, 0x7A5AA8);
+    mesh.position.set(segment.x, segment.y, segment.z);
+    this.worldGroup.add(mesh);
+  }
+
+  buildWorldCollisionData() {
+    if (!this.worldLayout) {
+      this.worldCollision = {
+        solidBoxes: [],
+        playerOnlyBoxes: [],
+        secondFloors: [],
+        ramps: []
+      };
+      return;
+    }
+
+    const solidBoxes = [];
+    const playerOnlyBoxes = [];
+    const secondFloors = [];
+    const ramps = [];
+
+    (this.worldLayout.walls || []).forEach(wall => {
+      const width = Number.isFinite(wall.width)
+        ? wall.width
+        : (wall.axis === 'x' ? wall.length : wall.thickness);
+      const depth = Number.isFinite(wall.depth)
+        ? wall.depth
+        : (wall.axis === 'x' ? wall.thickness : wall.length);
+      solidBoxes.push(this.makeBoxAabb(wall.x, wall.height / 2, wall.z, width, wall.height, depth));
+    });
+
+    (this.worldLayout.buildings || []).forEach(building => {
+      const segments = building.wallSegments || [];
+      segments.forEach(segment => {
+        const segmentY = Number.isFinite(segment.y) ? segment.y : segment.height / 2;
+        solidBoxes.push(this.makeBoxAabb(segment.x, segmentY, segment.z, segment.width, segment.height, segment.depth));
+      });
+
+      const openings = building.openings || [];
+      const halfW = building.width / 2;
+      const halfD = building.depth / 2;
+      const blockerDepth = Math.max(0.6, (building.wallThickness || 1) * 0.9);
+
+      for (const opening of openings) {
+        if (opening.type !== 'window') {
+          continue;
+        }
+
+        const blockerHeight = this.clamp((Number(opening.bottom) || 0) + 0.22, 1.25, 2.6);
+        const span = Math.max(0.9, opening.end - opening.start);
+        let blocker = null;
+
+        if (opening.side === 'north') {
+          blocker = this.makeBoxAabb(
+            building.x + (opening.start + opening.end) / 2,
+            blockerHeight / 2,
+            building.z - halfD,
+            span,
+            blockerHeight,
+            blockerDepth
+          );
+        } else if (opening.side === 'south') {
+          blocker = this.makeBoxAabb(
+            building.x + (opening.start + opening.end) / 2,
+            blockerHeight / 2,
+            building.z + halfD,
+            span,
+            blockerHeight,
+            blockerDepth
+          );
+        } else if (opening.side === 'west') {
+          blocker = this.makeBoxAabb(
+            building.x - halfW,
+            blockerHeight / 2,
+            building.z + (opening.start + opening.end) / 2,
+            blockerDepth,
+            blockerHeight,
+            span
+          );
+        } else if (opening.side === 'east') {
+          blocker = this.makeBoxAabb(
+            building.x + halfW,
+            blockerHeight / 2,
+            building.z + (opening.start + opening.end) / 2,
+            blockerDepth,
+            blockerHeight,
+            span
+          );
+        }
+
+        if (blocker) {
+          playerOnlyBoxes.push(blocker);
+        }
+      }
+    });
+
+    (this.worldLayout.secondFloors || []).forEach(floor => {
+      secondFloors.push(this.makeFlatRect(floor.x, floor.z, floor.width, floor.depth, floor.y));
+    });
+
+    (this.worldLayout.upperWalls || []).forEach(segment => {
+      solidBoxes.push(this.makeBoxAabb(segment.x, segment.y, segment.z, segment.width, segment.height, segment.depth));
+    });
+
+    (this.worldLayout.ramps || []).forEach(ramp => {
+      ramps.push({
+        x: ramp.x,
+        z: ramp.z,
+        width: ramp.width,
+        length: ramp.length,
+        direction: this.normalizeDirection(ramp.direction),
+        startY: Number.isFinite(ramp.startY) ? ramp.startY : 1,
+        endY: Number.isFinite(ramp.endY)
+          ? ramp.endY
+          : (Number.isFinite(ramp.startY) ? ramp.startY : 1) + (Number(ramp.height) || 0)
+      });
+    });
+
+    this.worldCollision = {
+      solidBoxes,
+      playerOnlyBoxes,
+      secondFloors,
+      ramps
+    };
+  }
+
+  worldToRampLocal(x, z, ramp) {
+    const dx = x - ramp.x;
+    const dz = z - ramp.z;
+    if (ramp.direction === 0) {
+      return { x: dx, z: dz };
+    }
+    if (ramp.direction === 90) {
+      return { x: dz, z: -dx };
+    }
+    if (ramp.direction === 180) {
+      return { x: -dx, z: -dz };
+    }
+    return { x: -dz, z: dx };
+  }
+
+  getTerrainHeightAt(x, z, currentY) {
+    const baseY = 1;
+    let targetY = baseY;
+    let rampHeight = null;
+
+    for (const ramp of this.worldCollision.ramps) {
+      const local = this.worldToRampLocal(x, z, ramp);
+      if (Math.abs(local.x) <= ramp.length / 2 && Math.abs(local.z) <= ramp.width / 2) {
+        const t = this.clamp((local.x + ramp.length / 2) / ramp.length, 0, 1);
+        const y = ramp.startY + (ramp.endY - ramp.startY) * t;
+        if (rampHeight === null || y > rampHeight) {
+          rampHeight = y;
+        }
+      }
+    }
+
+    if (rampHeight !== null) {
+      targetY = Math.max(targetY, rampHeight);
+    }
+
+    const canUseUpperFloor = (Number(currentY) || baseY) > baseY + 0.75 || rampHeight !== null;
+    for (const floor of this.worldCollision.secondFloors) {
+      if (x >= floor.minX && x <= floor.maxX && z >= floor.minZ && z <= floor.maxZ && canUseUpperFloor) {
+        targetY = Math.max(targetY, floor.y);
+      }
+    }
+
+    return targetY;
+  }
+
+  intersectsCircleAabb2d(x, z, radius, box) {
+    const closestX = this.clamp(x, box.minX, box.maxX);
+    const closestZ = this.clamp(z, box.minZ, box.maxZ);
+    const dx = x - closestX;
+    const dz = z - closestZ;
+    return dx * dx + dz * dz <= radius * radius;
+  }
+
+  isMovementBlocked(x, y, z) {
+    const minY = y;
+    const maxY = y + this.playerHeight;
+    const collisionBoxes = [
+      ...(this.worldCollision.solidBoxes || []),
+      ...(this.worldCollision.playerOnlyBoxes || [])
+    ];
+
+    for (const box of collisionBoxes) {
+      const overlapsVertical = maxY > box.minY && minY < box.maxY;
+      if (!overlapsVertical) {
+        continue;
+      }
+      if (this.intersectsCircleAabb2d(x, z, this.playerRadius, box)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  resolveLocalMovement(currentPosition, desiredPosition) {
+    const maxBounds = this.serverConfig.arenaHalfSize;
+    const currentX = Number(currentPosition.x) || 0;
+    const currentZ = Number(currentPosition.z) || 0;
+    const currentY = Number(currentPosition.y) || 1;
+    const targetX = this.clamp(Number(desiredPosition.x) || currentX, -maxBounds + 1, maxBounds - 1);
+    const targetZ = this.clamp(Number(desiredPosition.z) || currentZ, -maxBounds + 1, maxBounds - 1);
+
+    let resolvedX = currentX;
+    let resolvedZ = currentZ;
+
+    const xStepY = this.getTerrainHeightAt(targetX, currentZ, currentY);
+    if (!this.isMovementBlocked(targetX, xStepY, currentZ)) {
+      resolvedX = targetX;
+    }
+
+    const zStepY = this.getTerrainHeightAt(resolvedX, targetZ, currentY);
+    if (!this.isMovementBlocked(resolvedX, zStepY, targetZ)) {
+      resolvedZ = targetZ;
+    }
+
+    let resolvedY = this.getTerrainHeightAt(resolvedX, resolvedZ, currentY);
+    if (this.isMovementBlocked(resolvedX, resolvedY, resolvedZ)) {
+      resolvedX = currentX;
+      resolvedZ = currentZ;
+      resolvedY = this.getTerrainHeightAt(currentX, currentZ, currentY);
+    }
+
+    return {
+      x: resolvedX,
+      y: resolvedY,
+      z: resolvedZ
+    };
+  }
+
+  buildWorldGeometry() {
+    if (!this.worldLayout || !this.worldGroup) {
+      return;
+    }
+
+    this.clearWorldGeometry();
+
+    const walls = this.worldLayout.walls || [];
+    const buildings = this.worldLayout.buildings || [];
+    const ramps = this.worldLayout.ramps || [];
+    const secondFloors = this.worldLayout.secondFloors || [];
+    const upperWalls = this.worldLayout.upperWalls || [];
+
+    walls.forEach(wall => this.addWallMesh(wall));
+    buildings.forEach(building => this.addBuildingMeshes(building));
+    secondFloors.forEach(floor => this.addSecondFloorMesh(floor));
+    upperWalls.forEach(segment => this.addUpperWallMesh(segment));
+    ramps.forEach(ramp => this.addRampMesh(ramp));
+
+    this.buildWorldCollisionData();
+
+    this.worldBuilt = true;
   }
 
   syncBullets() {
@@ -699,13 +1251,15 @@ class GameEngine {
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
 
-    player.position.x += (forward.x * moveDir.z + right.x * moveDir.x) * speed;
-    player.position.z += (forward.z * moveDir.z + right.z * moveDir.x) * speed;
+    const targetPosition = {
+      x: player.position.x + (forward.x * moveDir.z + right.x * moveDir.x) * speed,
+      z: player.position.z + (forward.z * moveDir.z + right.z * moveDir.x) * speed
+    };
 
-    const maxBounds = this.serverConfig.arenaHalfSize;
-    player.position.x = Math.max(-maxBounds, Math.min(maxBounds, player.position.x));
-    player.position.z = Math.max(-maxBounds, Math.min(maxBounds, player.position.z));
-    player.position.y = 1;
+    const resolvedPosition = this.resolveLocalMovement(player.position, targetPosition);
+    player.position.x = resolvedPosition.x;
+    player.position.y = resolvedPosition.y;
+    player.position.z = resolvedPosition.z;
 
     this.camera.position.x = player.position.x;
     this.camera.position.y = player.position.y + 0.6;
@@ -727,7 +1281,18 @@ class GameEngine {
     const shouldSendMove = input.isMoving() || input.isShooting() || rotated;
 
     if (shouldSendMove) {
-      network.sendMove(player.position, player.rotation);
+      const inputSequence = this.nextInputSequence++;
+      network.sendMove(player.position, player.rotation, inputSequence);
+      this.pendingInputs.push({
+        sequence: inputSequence,
+        position: { ...player.position },
+        rotation: { ...player.rotation },
+        timestamp: now
+      });
+
+      if (this.pendingInputs.length > 120) {
+        this.pendingInputs.splice(0, this.pendingInputs.length - 120);
+      }
     }
 
     if (wantsShoot) {
@@ -738,6 +1303,71 @@ class GameEngine {
 
   shoot() {
     network.sendShoot();
+  }
+
+  reconcileLocalPlayer(serverPlayer) {
+    const localPlayer = playerManager.localPlayer;
+    if (!localPlayer) {
+      return;
+    }
+
+    const acknowledgedSequence = Number.isFinite(serverPlayer.lastInputSequence)
+      ? serverPlayer.lastInputSequence
+      : null;
+
+    let acknowledgedInput = null;
+    if (acknowledgedSequence !== null && this.pendingInputs.length > 0) {
+      for (const pending of this.pendingInputs) {
+        if (pending.sequence === acknowledgedSequence) {
+          acknowledgedInput = pending;
+          break;
+        }
+      }
+      this.pendingInputs = this.pendingInputs.filter(pending => pending.sequence > acknowledgedSequence);
+    }
+
+    const targetPosition = { ...localPlayer.position };
+    const targetRotation = { ...localPlayer.rotation };
+
+    if (acknowledgedInput) {
+      const baseErrorX = serverPlayer.position.x - acknowledgedInput.position.x;
+      const baseErrorY = serverPlayer.position.y - acknowledgedInput.position.y;
+      const baseErrorZ = serverPlayer.position.z - acknowledgedInput.position.z;
+      targetPosition.x += baseErrorX;
+      targetPosition.y += baseErrorY;
+      targetPosition.z += baseErrorZ;
+
+      const baseErrorRotX = serverPlayer.rotation.x - acknowledgedInput.rotation.x;
+      const baseErrorRotY = serverPlayer.rotation.y - acknowledgedInput.rotation.y;
+      targetRotation.x += baseErrorRotX;
+      targetRotation.y += baseErrorRotY;
+    } else {
+      targetPosition.x = serverPlayer.position.x;
+      targetPosition.y = serverPlayer.position.y;
+      targetPosition.z = serverPlayer.position.z;
+      targetRotation.x = serverPlayer.rotation.x;
+      targetRotation.y = serverPlayer.rotation.y;
+    }
+
+    const dx = targetPosition.x - localPlayer.position.x;
+    const dy = targetPosition.y - localPlayer.position.y;
+    const dz = targetPosition.z - localPlayer.position.z;
+    const distanceError = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (distanceError > 8) {
+      localPlayer.position.x = targetPosition.x;
+      localPlayer.position.y = targetPosition.y;
+      localPlayer.position.z = targetPosition.z;
+    } else if (distanceError > 0.02) {
+      const correctionAlpha = 0.35;
+      localPlayer.position.x += dx * correctionAlpha;
+      localPlayer.position.y += dy * correctionAlpha;
+      localPlayer.position.z += dz * correctionAlpha;
+    }
+
+    const rotationCorrectionAlpha = 0.35;
+    localPlayer.rotation.x += (targetRotation.x - localPlayer.rotation.x) * rotationCorrectionAlpha;
+    localPlayer.rotation.y += (targetRotation.y - localPlayer.rotation.y) * rotationCorrectionAlpha;
   }
 
   onWindowResize() {
@@ -816,6 +1446,33 @@ class GameEngine {
       html += `<div class="debug-bullet">...and ${bullets.length - maxBullets} more</div>`;
     }
 
+    const world = this.worldLayout || {};
+    const walls = world.walls || [];
+    const buildings = world.buildings || [];
+    const floors = world.secondFloors || [];
+    const upperWalls = world.upperWalls || [];
+
+    html += '<div class="debug-section debug-section-header">' +
+      '<strong>World:</strong>' +
+      '<span class="debug-hint">Buildings shown in purple in debug map</span>' +
+      '</div>';
+
+    html += `<div class="debug-item"><div class="debug-row">` +
+      `<span class="debug-key">walls</span><span class="debug-value">${walls.length}</span>` +
+      `<span class="debug-key">buildings</span><span class="debug-value">${buildings.length}</span>` +
+      `<span class="debug-key">floors</span><span class="debug-value">${floors.length}</span>` +
+      `<span class="debug-key">upper</span><span class="debug-value">${upperWalls.length}</span>` +
+      `</div></div>`;
+
+    walls.slice(0, 2).forEach((wall, index) => {
+      const width = Number.isFinite(wall.width) ? wall.width : (wall.axis === 'x' ? wall.length : wall.thickness);
+      const depth = Number.isFinite(wall.depth) ? wall.depth : (wall.axis === 'x' ? wall.thickness : wall.length);
+      html += `<div class="debug-item"><div class="debug-row">` +
+        `<span class="debug-key">wall${index + 1}</span>` +
+        `<span class="debug-value">(${fmtNum(wall.x)},${fmtNum(wall.z)}) ${fmtNum(width)}x${fmtNum(depth)} h${fmtNum(wall.height)}</span>` +
+        `</div></div>`;
+    });
+
     html += '<div class="debug-section debug-section-header">' +
       '<strong>Kills:</strong>' +
       '<span class="debug-hint">Show all: K</span>' +
@@ -840,6 +1497,8 @@ class GameEngine {
     requestAnimationFrame(() => this.gameLoop());
 
     this.update();
+    this.updateDeathScreenHint();
+    playerManager.updateRemoteInterpolation();
     this.syncBullets();
     this.updateHUD();
     playerManager.updateBillboards();

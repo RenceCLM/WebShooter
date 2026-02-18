@@ -15,10 +15,10 @@ const debugWss = new WebSocket.Server({ noServer: true });
 
 const PORT = process.env.PORT || 3000;
 const gameState = new GameState();
+const verboseRealtimeLogs = Boolean(config.logging && config.logging.verboseRealtime);
 
 // Serve static files from client directory
 app.use(express.static(path.join(__dirname, '../client')));
-app.use(express.json());
 
 // Serve main page
 app.get('/', (req, res) => {
@@ -38,16 +38,21 @@ const debugClients = new Set();
 server.on('upgrade', (request, socket, head) => {
   try {
     const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-    
-    console.log(`🔌 WebSocket upgrade request: ${pathname}`);
+    if (verboseRealtimeLogs) {
+      console.log(`🔌 WebSocket upgrade request: ${pathname}`);
+    }
 
     if (pathname.startsWith('/debug')) {
-      console.log('   → Routing to DEBUG server');
+      if (verboseRealtimeLogs) {
+        console.log('   → Routing to DEBUG server');
+      }
       debugWss.handleUpgrade(request, socket, head, (ws) => {
         debugWss.emit('connection', ws, request);
       });
     } else {
-      console.log('   → Routing to GAME server');
+      if (verboseRealtimeLogs) {
+        console.log('   → Routing to GAME server');
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -126,32 +131,42 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({
           type: 'joinResponse',
           name: newPlayer.name,
+          worldLayout: gameState.getWorldLayout(),
           config: {
-            arenaHalfSize: config.arena.halfSize,
+            arenaHalfSize: gameState.getArenaHalfSize(),
             shootCooldownMs: config.combat.shootCooldownMs,
             maxHealth: config.player.maxHealth,
-            lookSensitivity: config.input.lookSensitivity
+            lookSensitivity: config.input.lookSensitivity,
+            stateBroadcastHz: config.network.broadcastHz,
+            snapshotPrecision: Number(config.network && config.network.snapshotPrecision) || 0,
+            autoRespawn: Boolean(config.respawn && config.respawn.autoRespawn),
+            autoRespawnTime: Number(config.respawn && config.respawn.autoRespawnTime) || 0
           }
         }));
       } else if (message.type === 'move') {
         if (!hasJoined) {
           return;
         }
+        const player = gameState.players.get(playerId);
+        if (!player || player.deathTime) {
+          return;
+        }
         // Update player position and rotation
         gameState.updatePlayerPosition(
           playerId,
           message.position,
-          message.rotation
+          message.rotation,
+          message.inputSequence
         );
-        const player = gameState.players.get(playerId);
-        const playerName = player ? player.name : playerId.substring(0, 8);
-        console.log(`Player ${playerName}: moved to (${message.position.x.toFixed(1)}, ${message.position.z.toFixed(1)})`);
       } else if (message.type === 'shoot') {
         if (!hasJoined) {
           return;
         }
         const player = gameState.players.get(playerId);
         if (!player) {
+          return;
+        }
+        if (player.deathTime) {
           return;
         }
 
@@ -191,8 +206,10 @@ wss.on('connection', (ws) => {
             direction: bullet.direction
           }
         });
-        const playerName = player ? player.name : playerId.substring(0, 8);
-        console.log(`Player ${playerName}: fired bullet`);
+        if (verboseRealtimeLogs) {
+          const playerName = player ? player.name : playerId.substring(0, 8);
+          console.log(`Player ${playerName}: fired bullet`);
+        }
       } else if (message.type === 'respawn') {
         if (!hasJoined) {
           return;
@@ -224,39 +241,59 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Game loop - update game state and broadcast
-let frameCount = 0;
+// Simulation loop (authoritative world update)
 setInterval(() => {
+  gameState.updateSimpleBots();
   gameState.updateBullets();
-  // Respawns are handled by client input
+  gameState.checkForRespawns();
+}, 1000 / config.network.simulationHz);
 
-  const state = gameState.getGameState();
-  
-  // Log bullets and kills periodically
-  frameCount++;
-  if (frameCount % 30 === 0) {
-    if (state.bullets.length > 0) {
-      console.log(`📦 Broadcasting ${state.bullets.length} bullets`);
-    }
-    if (state.kills.length > 0) {
-      console.log(`📢 BROADCASTING KILLS:`, state.kills);
-    }
-  }
+// Broadcast loop (network snapshots)
+let stateSequence = 0;
+setInterval(() => {
+  const state = gameState.getGameState({
+    killsLimit: config.network.killsPerState,
+    bulletsLimit: config.network.maxBulletsPerState
+  });
+  const hasDebugClients = debugClients.size > 0;
 
   // Send current game state to all clients
   broadcastToAll({
     type: 'gameState',
+    sequence: stateSequence,
+    serverTime: Date.now(),
     state: state
   });
 
   // Send debug state to all debug clients
-  broadcastDebug({
-    type: 'debugState',
-    state: state
-  });
+  if (hasDebugClients) {
+    const debugState = gameState.getGameState({
+      killsLimit: config.network.killsPerState,
+      bulletsLimit: config.network.maxBulletsPerState,
+      includeWorld: true
+    });
 
-  // Kills are pruned by time window in game state.
-}, 1000 / 60); // 60 FPS
+    broadcastDebug({
+      type: 'debugState',
+      sequence: stateSequence,
+      serverTime: Date.now(),
+      state: debugState
+    });
+  }
+
+  stateSequence += 1;
+
+  if (verboseRealtimeLogs && stateSequence % config.network.broadcastHz === 0) {
+    if (state.bullets.length > 0) {
+      console.log(`📦 Broadcast bullets: ${state.bullets.length}`);
+    }
+    if (state.kills.length > 0) {
+      console.log(`📢 Broadcast kills (recent): ${state.kills.length}`);
+    }
+  }
+
+  // Kills are capped in state snapshots, full history is still retained in kill log.
+}, 1000 / config.network.broadcastHz);
 
 function broadcastToAll(message) {
   const data = JSON.stringify(message);

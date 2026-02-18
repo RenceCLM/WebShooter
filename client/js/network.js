@@ -68,7 +68,9 @@ class NetworkManager {
   }
 
   handleMessage(message) {
-    console.log('📨 Received message type:', message.type);
+    if (message.type !== 'gameState' && message.type !== 'debugState') {
+      console.log('📨 Received message type:', message.type);
+    }
     
     if (message.type === 'joinResponse') {
       console.log('✅ Joined server');
@@ -95,10 +97,11 @@ class NetworkManager {
     }
   }
 
-  sendMove(position, rotation) {
+  sendMove(position, rotation, inputSequence) {
     this.sendMessage('move', {
       position: position,
-      rotation: rotation
+      rotation: rotation,
+      inputSequence: inputSequence
     });
   }
 

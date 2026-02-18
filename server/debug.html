@@ -201,6 +201,18 @@
             <h2>🎮 Server Debug View - Overhead Map</h2>
             
             <div class="legend">
+                <div class="legend-item" style="color: #334D66;">
+                    <div class="legend-box"></div> Walls
+                </div>
+                <div class="legend-item" style="color: #7A5AA8;">
+                    <div class="legend-box"></div> Buildings
+                </div>
+                <div class="legend-item" style="color: #FFAA33;">
+                    <div class="legend-box"></div> Doors
+                </div>
+                <div class="legend-item" style="color: #66E6FF;">
+                    <div class="legend-box"></div> Windows
+                </div>
                 <div class="legend-item" style="color: #0088FF;">
                     <div class="legend-box"></div> Players
                 </div>
@@ -297,9 +309,116 @@
         };
 
         function drawMap() {
-            const mapSize = 200; // Game world size
             const canvasSize = canvas.width;
-            const scale = canvasSize / mapSize;
+            const world = gameState.worldLayout || { walls: [], buildings: [] };
+
+            const deriveBounds = () => {
+                const arenaBounds = world.bounds || {};
+                let minX = Number.isFinite(arenaBounds.minX) ? arenaBounds.minX : Infinity;
+                let maxX = Number.isFinite(arenaBounds.maxX) ? arenaBounds.maxX : -Infinity;
+                let minZ = Number.isFinite(arenaBounds.minZ) ? arenaBounds.minZ : Infinity;
+                let maxZ = Number.isFinite(arenaBounds.maxZ) ? arenaBounds.maxZ : -Infinity;
+
+                if (Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minZ) && Number.isFinite(maxZ)) {
+                    const spanX = Math.max(1, maxX - minX);
+                    const spanZ = Math.max(1, maxZ - minZ);
+                    return {
+                        mapSize: Math.max(spanX, spanZ),
+                        centerX: (minX + maxX) / 2,
+                        centerZ: (minZ + maxZ) / 2
+                    };
+                }
+
+                const includePoint = (x, z) => {
+                    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+                        return;
+                    }
+                    minX = Math.min(minX, x);
+                    maxX = Math.max(maxX, x);
+                    minZ = Math.min(minZ, z);
+                    maxZ = Math.max(maxZ, z);
+                };
+
+                const includeRect = (x, z, width, depth) => {
+                    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(width) || !Number.isFinite(depth)) {
+                        return;
+                    }
+                    includePoint(x - width / 2, z - depth / 2);
+                    includePoint(x + width / 2, z + depth / 2);
+                };
+
+                for (const wall of world.walls || []) {
+                    const width = Number.isFinite(wall.width)
+                        ? wall.width
+                        : (wall.axis === 'x' ? wall.length : wall.thickness);
+                    const depth = Number.isFinite(wall.depth)
+                        ? wall.depth
+                        : (wall.axis === 'x' ? wall.thickness : wall.length);
+                    includeRect(wall.x, wall.z, width, depth);
+                }
+
+                for (const building of world.buildings || []) {
+                    includeRect(building.x, building.z, building.width, building.depth);
+                }
+
+                if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+                    minX = -100;
+                    maxX = 100;
+                    minZ = -100;
+                    maxZ = 100;
+                }
+
+                const spanX = Math.max(1, maxX - minX);
+                const spanZ = Math.max(1, maxZ - minZ);
+                const mapSize = Math.max(spanX, spanZ);
+                const centerX = (minX + maxX) / 2;
+                const centerZ = (minZ + maxZ) / 2;
+
+                return {
+                    mapSize,
+                    centerX,
+                    centerZ
+                };
+            };
+
+            const bounds = deriveBounds();
+            const scale = canvasSize / bounds.mapSize;
+
+            const worldToScreen = (x, z) => ({
+                x: (x - (bounds.centerX - bounds.mapSize / 2)) * scale,
+                y: (z - (bounds.centerZ - bounds.mapSize / 2)) * scale
+            });
+
+            const drawOpeningLine = (x1, z1, x2, z2, color, lineWidth = 2) => {
+                const p1 = worldToScreen(x1, z1);
+                const p2 = worldToScreen(x2, z2);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+            };
+
+            const drawRotatedRect = (x, z, width, depth, directionDeg, color) => {
+                const center = worldToScreen(x, z);
+                const widthPx = width * scale;
+                const depthPx = depth * scale;
+                ctx.save();
+                ctx.translate(center.x, center.y);
+                ctx.rotate((directionDeg || 0) * Math.PI / 180);
+                ctx.fillStyle = color;
+                ctx.fillRect(-widthPx / 2, -depthPx / 2, widthPx, depthPx);
+                ctx.restore();
+            };
+
+            const playerColorToCss = (value, fallback) => {
+                if (typeof value !== 'number' || !Number.isFinite(value)) {
+                    return fallback;
+                }
+                const hex = Math.max(0, Math.floor(value)).toString(16).padStart(6, '0');
+                return `#${hex}`;
+            };
 
             // Clear canvas
             ctx.fillStyle = '#050810';
@@ -324,23 +443,78 @@
             // Draw center
             ctx.strokeStyle = '#FF8800';
             ctx.lineWidth = 1;
-            const centerScreen = canvasSize / 2;
+            const centerPoint = worldToScreen(bounds.centerX, bounds.centerZ);
             ctx.beginPath();
-            ctx.moveTo(centerScreen - 5, centerScreen);
-            ctx.lineTo(centerScreen + 5, centerScreen);
+            ctx.moveTo(centerPoint.x - 5, centerPoint.y);
+            ctx.lineTo(centerPoint.x + 5, centerPoint.y);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(centerScreen, centerScreen - 5);
-            ctx.lineTo(centerScreen, centerScreen + 5);
+            ctx.moveTo(centerPoint.x, centerPoint.y - 5);
+            ctx.lineTo(centerPoint.x, centerPoint.y + 5);
             ctx.stroke();
+
+            // Draw world walls
+            for (const wall of world.walls || []) {
+                const width = Number.isFinite(wall.width)
+                    ? wall.width
+                    : (wall.axis === 'x' ? wall.length : wall.thickness);
+                const depth = Number.isFinite(wall.depth)
+                    ? wall.depth
+                    : (wall.axis === 'x' ? wall.thickness : wall.length);
+                drawRotatedRect(wall.x, wall.z, width, depth, 0, '#334D66');
+            }
+
+            // Draw building footprints (purple)
+            for (const building of world.buildings || []) {
+                drawRotatedRect(building.x, building.z, building.width, building.depth, 0, 'rgba(122, 90, 168, 0.55)');
+                drawRotatedRect(building.x, building.z, building.width, building.depth, 0, 'rgba(122, 90, 168, 0.2)');
+
+                const halfW = building.width / 2;
+                const halfD = building.depth / 2;
+                const openings = building.openings || [];
+                for (const opening of openings) {
+                    let x1 = building.x;
+                    let z1 = building.z;
+                    let x2 = building.x;
+                    let z2 = building.z;
+
+                    if (opening.side === 'north') {
+                        x1 = building.x + opening.start;
+                        z1 = building.z - halfD;
+                        x2 = building.x + opening.end;
+                        z2 = z1;
+                    } else if (opening.side === 'south') {
+                        x1 = building.x + opening.start;
+                        z1 = building.z + halfD;
+                        x2 = building.x + opening.end;
+                        z2 = z1;
+                    } else if (opening.side === 'west') {
+                        x1 = building.x - halfW;
+                        z1 = building.z + opening.start;
+                        x2 = x1;
+                        z2 = building.z + opening.end;
+                    } else if (opening.side === 'east') {
+                        x1 = building.x + halfW;
+                        z1 = building.z + opening.start;
+                        x2 = x1;
+                        z2 = building.z + opening.end;
+                    }
+
+                    const color = opening.type === 'door' ? '#FFAA33' : '#66E6FF';
+                    const width = opening.type === 'door' ? 3 : 2;
+                    drawOpeningLine(x1, z1, x2, z2, color, width);
+                }
+            }
 
             // Draw players
             for (const player of gameState.players) {
-                const screenX = (player.position.x + mapSize / 2) * scale;
-                const screenY = (player.position.z + mapSize / 2) * scale;
+                const screenPos = worldToScreen(player.position.x, player.position.z);
+                const screenX = screenPos.x;
+                const screenY = screenPos.y;
                 const isDead = player.health <= 0;
-                const bodyColor = isDead ? '#666666' : '#0088FF';
-                const accentColor = isDead ? '#888888' : '#00CCFF';
+                const baseColor = playerColorToCss(player.color, '#0088FF');
+                const bodyColor = isDead ? '#666666' : baseColor;
+                const accentColor = isDead ? '#888888' : baseColor;
 
                 // Player circle
                 ctx.fillStyle = bodyColor;
@@ -368,8 +542,9 @@
             // Draw bullets
             ctx.fillStyle = '#FF8800';
             for (const bullet of gameState.bullets) {
-                const screenX = (bullet.position.x + mapSize / 2) * scale;
-                const screenY = (bullet.position.z + mapSize / 2) * scale;
+                const screenPos = worldToScreen(bullet.position.x, bullet.position.z);
+                const screenX = screenPos.x;
+                const screenY = screenPos.y;
                 ctx.beginPath();
                 ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
                 ctx.fill();
