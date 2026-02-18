@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebShooter Debug - Server View</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0e27;
+            color: #00CCFF;
+            padding: 20px;
+            display: flex;
+            gap: 20px;
+        }
+
+        .container {
+            flex: 1;
+            max-width: 1200px;
+        }
+
+        .section {
+            background: rgba(10, 14, 39, 0.8);
+            border: 2px solid #FF8800;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .section h2 {
+            color: #FF8800;
+            margin-bottom: 10px;
+            font-size: 16px;
+            text-shadow: 0 0 10px #FF6600;
+        }
+
+        #canvas {
+            display: block;
+            border: 2px solid #00CCFF;
+            background: #050810;
+            margin-bottom: 10px;
+            image-rendering: pixelated;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            border-left: 3px solid #FF8800;
+        }
+
+        .stat-label {
+            color: #FF8800;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            color: #00CCFF;
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+
+        .players-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .player-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid #0088FF;
+            font-size: 12px;
+        }
+
+        .player-item.local {
+            border-left-color: #FFD700;
+        }
+
+        .player-name {
+            color: #00CCFF;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .player-info {
+            color: #FF8800;
+            margin: 3px 0;
+            font-size: 11px;
+        }
+
+        .connection-status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin-right: 10px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .connected {
+            background: #00AA00;
+            color: #000;
+        }
+
+        .disconnected {
+            background: #AA0000;
+            color: #fff;
+        }
+
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 3px;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-box {
+            width: 20px;
+            height: 20px;
+            border: 2px solid currentColor;
+        }
+
+        .bullets-info {
+            font-size: 12px;
+            color: #FF8800;
+            margin-top: 10px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #FF8800;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #FFB833;
+        }
+
+        .connection-banner {
+            position: fixed;
+            top: -60px;
+            left: 0;
+            right: 0;
+            height: 50px;
+            background: #AA0000;
+            color: #fff;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+            letter-spacing: 1px;
+            transition: top 0.3s ease;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        .connection-banner.show {
+            top: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="debugConnectionBanner" class="connection-banner">DISCONNECTED</div>
+    <div class="container">
+        <div class="section">
+            <h2>🎮 Server Debug View - Overhead Map</h2>
+            
+            <div class="legend">
+                <div class="legend-item" style="color: #0088FF;">
+                    <div class="legend-box"></div> Players
+                </div>
+                <div class="legend-item" style="color: #FF8800;">
+                    <div class="legend-box"></div> Bullets
+                </div>
+            </div>
+
+            <canvas id="canvas" width="600" height="600"></canvas>
+
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Connected Players</div>
+                    <div class="stat-value" id="playerCount">0</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Active Bullets</div>
+                    <div class="stat-value" id="bulletCount">0</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Server Updates/sec</div>
+                    <div class="stat-value" id="updateRate">0</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Connection Status</div>
+                    <div class="stat-value" id="connStatus"><span class="connection-status disconnected">Disconnected</span></div>
+                </div>
+            </div>
+
+            <div id="status"></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="section">
+            <h2>👥 Player Details</h2>
+            <div class="players-list" id="playersList"></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let gameState = { players: [], bullets: [] };
+        let updateCount = 0;
+        let lastUpdateTime = Date.now();
+
+        // Connect to server via WebSocket for debug updates
+        const debugWs = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/debug`);
+
+        function setDebugConnectionBanner(connected) {
+            const banner = document.getElementById('debugConnectionBanner');
+            if (!banner) return;
+            if (connected) {
+                banner.classList.remove('show');
+            } else {
+                banner.textContent = 'DISCONNECTED';
+                banner.classList.add('show');
+            }
+        }
+
+        debugWs.onopen = () => {
+            console.log('Connected to debug WebSocket');
+            document.getElementById('connStatus').innerHTML = '<span class="connection-status connected">Connected</span>';
+            setDebugConnectionBanner(true);
+        };
+
+        debugWs.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'debugState') {
+                    gameState = message.state;
+                    updateCount++;
+                    drawMap();
+                    updateStats();
+                    updatePlayersList();
+                }
+            } catch (error) {
+                console.error('Debug message error:', error);
+            }
+        };
+
+        debugWs.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            document.getElementById('connStatus').innerHTML = '<span class="connection-status disconnected">Disconnected</span>';
+            setDebugConnectionBanner(false);
+        };
+
+        debugWs.onclose = () => {
+            console.log('Disconnected from debug WebSocket');
+            document.getElementById('connStatus').innerHTML = '<span class="connection-status disconnected">Disconnected</span>';
+            setDebugConnectionBanner(false);
+        };
+
+        function drawMap() {
+            const mapSize = 200; // Game world size
+            const canvasSize = canvas.width;
+            const scale = canvasSize / mapSize;
+
+            // Clear canvas
+            ctx.fillStyle = '#050810';
+            ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+            // Grid
+            ctx.strokeStyle = '#1a3a4a';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 10; i++) {
+                const pos = (canvasSize / 10) * i;
+                ctx.beginPath();
+                ctx.moveTo(pos, 0);
+                ctx.lineTo(pos, canvasSize);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, pos);
+                ctx.lineTo(canvasSize, pos);
+                ctx.stroke();
+            }
+
+            // Draw center
+            ctx.strokeStyle = '#FF8800';
+            ctx.lineWidth = 1;
+            const centerScreen = canvasSize / 2;
+            ctx.beginPath();
+            ctx.moveTo(centerScreen - 5, centerScreen);
+            ctx.lineTo(centerScreen + 5, centerScreen);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(centerScreen, centerScreen - 5);
+            ctx.lineTo(centerScreen, centerScreen + 5);
+            ctx.stroke();
+
+            // Draw players
+            for (const player of gameState.players) {
+                const screenX = (player.position.x + mapSize / 2) * scale;
+                const screenY = (player.position.z + mapSize / 2) * scale;
+                const isDead = player.health <= 0;
+                const bodyColor = isDead ? '#666666' : '#0088FF';
+                const accentColor = isDead ? '#888888' : '#00CCFF';
+
+                // Player circle
+                ctx.fillStyle = bodyColor;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Player rotation indicator
+                ctx.strokeStyle = accentColor;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                const dirX = Math.cos(player.rotation.y) * 8;
+                const dirZ = Math.sin(player.rotation.y) * 8;
+                ctx.moveTo(screenX, screenY);
+                ctx.lineTo(screenX + dirX, screenY + dirZ);
+                ctx.stroke();
+
+                // Player name label
+                ctx.fillStyle = accentColor;
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(player.name.substring(0, 10), screenX, screenY - 12);
+            }
+
+            // Draw bullets
+            ctx.fillStyle = '#FF8800';
+            for (const bullet of gameState.bullets) {
+                const screenX = (bullet.position.x + mapSize / 2) * scale;
+                const screenY = (bullet.position.z + mapSize / 2) * scale;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function updateStats() {
+            document.getElementById('playerCount').textContent = gameState.players.length;
+            document.getElementById('bulletCount').textContent = gameState.bullets.length;
+
+            // Calculate updates per second
+            const now = Date.now();
+            const elapsed = now - lastUpdateTime;
+            if (elapsed >= 1000) {
+                const rate = Math.round((updateCount * 1000) / elapsed);
+                document.getElementById('updateRate').textContent = rate;
+                updateCount = 0;
+                lastUpdateTime = now;
+            }
+        }
+
+        function updatePlayersList() {
+            const list = document.getElementById('playersList');
+            list.innerHTML = '';
+
+            for (const player of gameState.players) {
+                const playerDiv = document.createElement('div');
+                playerDiv.className = 'player-item';
+
+                playerDiv.innerHTML = `
+                    <div class="player-name">${player.name}</div>
+                    <div class="player-info">ID: ${player.id.substring(0, 8)}...</div>
+                    <div class="player-info">Position: (${player.position.x.toFixed(1)}, ${player.position.y.toFixed(1)}, ${player.position.z.toFixed(1)})</div>
+                    <div class="player-info">Health: <span style="color: ${player.health > 50 ? '#00CCFF' : player.health > 25 ? '#FF8800' : '#FF3300'}">${player.health}</span>/100</div>
+                    <div class="player-info">Score: ${player.score}</div>
+                    <div class="player-info">Rotation: (${player.rotation.x.toFixed(2)}, ${player.rotation.y.toFixed(2)}, ${player.rotation.z.toFixed(2)})</div>
+                `;
+
+                list.appendChild(playerDiv);
+            }
+        }
+
+        // Initial draw
+        drawMap();
+    </script>
+</body>
+</html>

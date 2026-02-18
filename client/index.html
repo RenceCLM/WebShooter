@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebShooter - 3D Multiplayer Game</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="connectionBanner" class="connection-banner">DISCONNECTED</div>
+    <div id="gameContainer"></div>
+    
+    <!-- Debug Overlay -->
+    <div id="debugOverlay"></div>
+    
+    <!-- Game Over Screen -->
+    <div id="gameOverScreen" class="modal-overlay">
+        <div class="modal-content game-over">
+            <h1>GAME OVER</h1>
+            <p>You were eliminated by:</p>
+            <div class="death-by-killer" id="gameOverKillerName">Unknown Player</div>
+            <p class="game-over-hint">Press ANY KEY to respawn</p>
+        </div>
+    </div>
+    
+    <div id="hud">
+        <div id="leaderboard" class="leaderboard"></div>
+        <div id="playerInfo">
+            <div class="info-item">
+                <span class="label">Name:</span>
+                <span id="playerName" class="value">Loading...</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Position:</span>
+                <span id="position" class="value">X: 0.0 Y: 0.0 Z: 0.0</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Health:</span>
+                <span id="health" class="value">100</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Score:</span>
+                <span id="score" class="value">0</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Players:</span>
+                <span id="playerCount" class="value">1</span>
+            </div>
+        </div>
+        
+        <div id="instructions">
+            <h3>CONTROLS</h3>
+            <p><strong>W/A/S/D</strong> - Move<br>
+            <strong>Mouse</strong> - Look Around<br>
+            <strong>Click / Space</strong> - Shoot<br>
+            <strong>L</strong> - Lock Mouse (Optional)<br>
+            <strong>F3</strong> - Show/Hide Debug<br>
+            <strong>Tab</strong> - Scoreboard<br>
+            <strong>F1</strong> - Show/Hide Controls<br>
+            <strong>Mobile</strong> - On-screen controls + Menu<br>
+            <strong>Esc</strong> - Unlock Mouse</p>
+        </div>
+    </div>
+
+    <div id="mobileControls" class="mobile-controls">
+        <div class="mobile-dpad">
+            <div class="dpad-btn up" data-dir="w"></div>
+            <div class="dpad-btn left" data-dir="a"></div>
+            <div class="dpad-btn right" data-dir="d"></div>
+            <div class="dpad-btn down" data-dir="s"></div>
+        </div>
+        <button id="mobileFire" class="mobile-fire" aria-label="Fire"></button>
+        <details id="mobileMenu" class="mobile-menu">
+            <summary>Menu</summary>
+            <div class="mobile-menu-items">
+                <button data-toggle="playerInfo">Toggle Info</button>
+                <button data-toggle="instructions">Toggle Controls</button>
+                <button data-toggle="leaderboard">Toggle Scoreboard</button>
+                <button data-toggle="debugOverlay">Toggle Debug</button>
+            </div>
+        </details>
+    </div>
+
+    <!-- Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- Game scripts -->
+    <script src="js/nameGenerator.js"></script>
+    <script src="js/network.js"></script>
+    <script src="js/input.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/game.js"></script>
+</body>
+</html>
