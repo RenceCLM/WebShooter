@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebShooter 2.1 - Quad Arena</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+
+        #gameContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: #00D9FF;
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        #miniMapWrapper {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+            height: 200px;
+            border: 1px solid #00D9FF;
+            background: rgba(0, 20, 35, 0.6);
+            z-index: 60;
+            pointer-events: none;
+        }
+
+        #miniMap {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .hud-line {
+            margin-bottom: 5px;
+        }
+
+        #teleportPanel {
+            margin-top: 15px;
+            padding: 8px;
+            background: rgba(0, 30, 50, 0.5);
+            border: 1px solid #00D9FF;
+            border-radius: 4px;
+            pointer-events: auto;
+        }
+
+        .teleport-label {
+            display: block;
+            margin-bottom: 3px;
+            font-size: 11px;
+            color: #00B8E8;
+        }
+
+        .teleport-input-group {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 5px;
+        }
+
+        .teleport-input {
+            width: 60px;
+            padding: 3px;
+            background: #0a1a2a;
+            border: 1px solid #004466;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 11px;
+        }
+
+        .teleport-input:focus {
+            outline: none;
+            border-color: #00D9FF;
+            background: #0a2a3a;
+        }
+
+        #teleportBtn {
+            width: 100%;
+            padding: 4px 8px;
+            background: #1a4a6a;
+            border: 1px solid #00D9FF;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #teleportBtn:hover {
+            background: #1a5a8a;
+        }
+
+        #teleportBtn:active {
+            background: #0a3a5a;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer"></div>
+    <div id="crosshair"></div>
+    <div id="miniMapWrapper">
+        <canvas id="miniMap" width="200" height="200"></canvas>
+    </div>
+    <div id="hud">
+        <div class="hud-line">Players: <span id="playerCount">1</span></div>
+        <div class="hud-line">Health: <span id="health">100</span></div>
+        <div class="hud-line">Pos: <span id="position">0, 0, 0</span></div>
+        <div id="teleportPanel">
+            <div class="teleport-label">Teleport to:</div>
+            <div class="teleport-input-group">
+                <input type="number" id="teleportX" class="teleport-input" placeholder="X" min="-600" max="600" value="0">
+                <input type="number" id="teleportZ" class="teleport-input" placeholder="Z" min="-600" max="600" value="0">
+            </div>
+            <button id="teleportBtn">Go</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Layout C - Quad Arena Configuration
+        window.WEBSHOOTER_LAYOUT = {
+          name: 'Layout C - Quad Arena',
+          arenaHalfSize: 600,
+          defaultWindowCount: 3,
+          coverWalls: [
+            // Perimeter split walls (two long segments per side with center gap)
+            { x: -420, z: -170, width: 12, depth: 200, height: 14 },
+            { x: -420, z: 170, width: 12, depth: 200, height: 14 },
+            { x: 420, z: -170, width: 12, depth: 200, height: 14 },
+            { x: 420, z: 170, width: 12, depth: 200, height: 14 },
+            { x: -170, z: -420, width: 200, depth: 12, height: 14 },
+            { x: 170, z: -420, width: 200, depth: 12, height: 14 },
+            { x: -170, z: 420, width: 200, depth: 12, height: 14 },
+            { x: 170, z: 420, width: 200, depth: 12, height: 14 },
+            // Quadrant dividers (create 4 separated zones)
+            { x: -170, z: 0, width: 14, depth: 200, height: 11 },
+            { x: 170, z: 0, width: 14, depth: 200, height: 11 },
+            { x: 0, z: -170, width: 200, depth: 14, height: 11 },
+            { x: 0, z: 170, width: 200, depth: 14, height: 11 },
+            // Center cross (+)
+            { x: 0, z: 0, width: 14, depth: 160, height: 11 },
+            { x: 0, z: 0, width: 160, depth: 14, height: 11 }
+          ],
+          buildings: [
+            {
+              x: -280, z: -280, width: 110, depth: 86, height: 11,
+              doorOffsetsBySide: { east: [0] },
+              windowOffsetsBySide: { north: [-28, -8, 16], south: [-20, 12], east: [-16, 16], west: [-18, 10] }
+            },
+            {
+              x: 280, z: -280, width: 110, depth: 86, height: 11,
+              doorOffsetsBySide: { west: [0], north: [10] },
+              windowOffsetsBySide: { north: [-24, 28], south: [-26, -4, 22], east: [-14, 14], west: [-18, 18] }
+            },
+            {
+              x: -280, z: 280, width: 110, depth: 86, height: 11,
+              doorOffsetsBySide: { east: [0], south: [-10], north: [12] },
+              windowOffsetsBySide: { north: [-28, -2, 26], south: [-30, 18], east: [-18, 16], west: [-20, 8] }
+            },
+            {
+              x: 280, z: 280, width: 110, depth: 86, height: 11,
+              doorOffsetsBySide: { west: [0], south: [-10], east: [8], north: [10] },
+              windowOffsetsBySide: { north: [-30, -8, 24], south: [-28, 20], east: [-18, 18], west: [-16, 16] }
+            },
+            {
+              x: -100, z: -280, width: 92, depth: 88, height: 10.6,
+              doorOffsetsBySide: { south: [0] },
+              windowOffsetsBySide: { north: [-20, 6], south: [-24, 18], east: [-16, 10], west: [-14, 14] }
+            },
+            {
+              x: 100, z: -280, width: 92, depth: 88, height: 10.6,
+              doorOffsetsBySide: { south: [0], east: [8] },
+              windowOffsetsBySide: { north: [-18, 12], south: [-24, 18], east: [-18, 16], west: [-14, 10] }
+            },
+            {
+              x: -100, z: 280, width: 92, depth: 88, height: 10.6,
+              doorOffsetsBySide: { north: [0], west: [-8], east: [8] },
+              windowOffsetsBySide: { north: [-24, 18], south: [-18, 8], east: [-16, 16], west: [-18, 14] }
+            },
+            {
+              x: 100, z: 280, width: 92, depth: 88, height: 10.6,
+              doorOffsetsBySide: { north: [0], west: [-8], east: [8], south: [0] },
+              windowOffsetsBySide: { north: [-22, 20], south: [-20, 10], east: [-16, 16], west: [-16, 16] }
+            },
+            {
+              x: -280, z: -100, width: 88, depth: 92, height: 10.6,
+              doorOffsetsBySide: { east: [0] },
+              windowOffsetsBySide: { north: [-16, 12], south: [-18, 10], east: [-20, 16], west: [-16, 14] }
+            },
+            {
+              x: -280, z: 100, width: 88, depth: 92, height: 10.6,
+              doorOffsetsBySide: { east: [0], north: [8] },
+              windowOffsetsBySide: { north: [-20, 18], south: [-16, 8], east: [-18, 18], west: [-14, 14] }
+            },
+            {
+              x: 280, z: -100, width: 88, depth: 92, height: 10.6,
+              doorOffsetsBySide: { west: [0], south: [-8], north: [10] },
+              windowOffsetsBySide: { north: [-18, 18], south: [-20, 16], east: [-14, 12], west: [-18, 18] }
+            },
+            {
+              x: 280, z: 100, width: 88, depth: 92, height: 10.6,
+              doorOffsetsBySide: { west: [0], south: [-8], north: [10], east: [8] },
+              windowOffsetsBySide: { north: [-18, 20], south: [-18, 14], east: [-16, 16], west: [-18, 18] }
+            }
+          ]
+        };
+    </script>
+    <script src="game.js"></script>
+</body>
+</html>

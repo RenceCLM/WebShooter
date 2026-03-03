@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebShooter 2.1 - Layout C (Quad Arena)</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+
+        #gameContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: #00D9FF;
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        #miniMapWrapper {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+            height: 200px;
+            border: 1px solid #00D9FF;
+            background: rgba(0, 20, 35, 0.6);
+            z-index: 60;
+            pointer-events: none;
+        }
+
+        #miniMap {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .hud-line {
+            margin-bottom: 5px;
+        }
+
+        #teleportPanel {
+            margin-top: 15px;
+            padding: 8px;
+            background: rgba(0, 30, 50, 0.5);
+            border: 1px solid #00D9FF;
+            border-radius: 4px;
+            pointer-events: auto;
+        }
+
+        .teleport-label {
+            display: block;
+            margin-bottom: 3px;
+            font-size: 11px;
+            color: #00B8E8;
+        }
+
+        .teleport-input-group {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 5px;
+        }
+
+        .teleport-input {
+            width: 60px;
+            padding: 3px;
+            background: #0a1a2a;
+            border: 1px solid #004466;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 11px;
+        }
+
+        .teleport-input:focus {
+            outline: none;
+            border-color: #00D9FF;
+            background: #0a2a3a;
+        }
+
+        #teleportBtn {
+            width: 100%;
+            padding: 4px 8px;
+            background: #1a4a6a;
+            border: 1px solid #00D9FF;
+            color: #00D9FF;
+            font-family: monospace;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #teleportBtn:hover {
+            background: #1a5a8a;
+        }
+
+        #teleportBtn:active {
+            background: #0a3a5a;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer"></div>
+    <div id="crosshair"></div>
+    <div id="miniMapWrapper">
+        <canvas id="miniMap" width="200" height="200"></canvas>
+    </div>
+    <div id="hud">
+        <div class="hud-line">Players: <span id="playerCount">1</span></div>
+        <div class="hud-line">Health: <span id="health">100</span></div>
+        <div class="hud-line">Pos: <span id="position">0, 0, 0</span></div>
+        <div id="teleportPanel">
+            <div class="teleport-label">Teleport to:</div>
+            <div class="teleport-input-group">
+                <input type="number" id="teleportX" class="teleport-input" placeholder="X" min="-600" max="600" value="0">
+                <input type="number" id="teleportZ" class="teleport-input" placeholder="Z" min="-600" max="600" value="0">
+            </div>
+            <button id="teleportBtn">Go</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="layout-c.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
